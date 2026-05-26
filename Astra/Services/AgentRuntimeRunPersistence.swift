@@ -33,6 +33,11 @@ enum AgentRuntimeRunPersistence {
     ) {
         AgentEventCompactor.compactEvents(for: task, modelContext: modelContext)
         AgentPolicyManifestService.recordPostRunSummary(task: task, run: run, modelContext: modelContext)
+        OperationalCognitionService.recordPostRunAdvisories(
+            task: task,
+            run: run,
+            modelContext: modelContext
+        )
 
         let finishedAt = Date()
         task.updatedAt = finishedAt

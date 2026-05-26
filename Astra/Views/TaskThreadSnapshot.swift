@@ -592,7 +592,11 @@ struct TaskThreadSnapshot: Sendable {
                         id: event.id,
                         payload: event.payload
                     ))
-                case "budget.warning", "budget.exceeded", "error", "permission.approval.requested", "astra.permission_summary":
+                case "budget.warning", "budget.exceeded", "error", "permission.approval.requested", "astra.permission_summary",
+                     OperationalCognitionEventTypes.runSummary,
+                     OperationalCognitionEventTypes.taskHealth,
+                     OperationalCognitionEventTypes.attentionSignal,
+                     OperationalCognitionEventTypes.stateCompressed:
                     noticesByRunID[runID, default: []].append(TaskRunNotice(
                         id: event.id,
                         type: event.type,

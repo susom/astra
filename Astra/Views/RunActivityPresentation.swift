@@ -164,6 +164,119 @@ struct TechnicalOutputPresentation: Identifiable, Hashable, Sendable {
     let severity: RunActivitySeverity
 }
 
+struct CognitionAdvisoryPresentation: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let title: String
+    let summary: String
+    let severity: RunActivitySeverity
+    let facts: [RunFactPresentation]
+    let rawPayload: String?
+
+    init?(notice: TaskRunNotice) {
+        guard let result = CognitionJobResult.decodePayload(notice.payload) else {
+            return nil
+        }
+
+        id = notice.id
+        title = Self.title(for: result)
+        summary = Self.summary(for: result)
+        severity = Self.severity(for: result)
+        facts = Self.facts(for: result)
+        rawPayload = PayloadFormatter.prettyRawPayload(notice.payload)
+    }
+
+    private static func title(for result: CognitionJobResult) -> String {
+        switch result.kind {
+        case .runSummary:
+            "Run summary"
+        case .taskHealth:
+            "Task health"
+        case .attentionSignal:
+            result.attentionSignal?.title ?? "Attention signal"
+        case .stateCompression:
+            "Compressed state"
+        }
+    }
+
+    private static func summary(for result: CognitionJobResult) -> String {
+        if let attention = result.attentionSignal {
+            return attention.message
+        }
+        if let health = result.taskHealth {
+            return health.summary
+        }
+        if let compressed = result.compressedState {
+            return compressed.latestOutcome
+        }
+        return result.summary
+    }
+
+    private static func severity(for result: CognitionJobResult) -> RunActivitySeverity {
+        if let severity = result.attentionSignal?.severity {
+            switch severity {
+            case .info: return .info
+            case .warning: return .warning
+            case .error: return .error
+            }
+        }
+        switch result.taskHealth?.state {
+        case .needsAttention, .budgetExceeded:
+            return .warning
+        case .failed:
+            return .error
+        default:
+            return .info
+        }
+    }
+
+    private static func facts(for result: CognitionJobResult) -> [RunFactPresentation] {
+        var facts: [RunFactPresentation] = [
+            .init(title: "Kind", value: result.kind.rawValue),
+            .init(title: "Advisory", value: result.advisory ? "yes" : "no"),
+            .init(title: "Confidence", value: String(format: "%.2f", result.confidence)),
+            .init(title: "Method", value: result.provenance.method),
+            .init(title: "Source events", value: String(result.provenance.sourceEventCount))
+        ]
+
+        if let health = result.taskHealth {
+            facts.append(.init(title: "State", value: health.state.rawValue))
+            facts.append(.init(title: "Score", value: "\(health.score)/100"))
+            if let action = health.recommendedAction {
+                facts.append(.init(title: "Next action", value: action))
+            }
+        }
+
+        if let attention = result.attentionSignal {
+            facts.append(.init(title: "Signal", value: attention.kind.rawValue))
+            if let action = attention.recommendedAction {
+                facts.append(.init(title: "Next action", value: action))
+            }
+            if let source = attention.sourceEventType {
+                facts.append(.init(title: "Source", value: source))
+            }
+        }
+
+        if let runSummary = result.runSummary {
+            facts.append(.init(title: "Run status", value: runSummary.status))
+            if !runSummary.stopReason.isEmpty {
+                facts.append(.init(title: "Stop reason", value: runSummary.stopReason))
+            }
+            facts.append(.init(title: "Tools", value: String(runSummary.toolUseCount)))
+            facts.append(.init(title: "Files", value: String(runSummary.filesChanged.count)))
+            facts.append(.init(title: "Issues", value: String(runSummary.issueCount)))
+        }
+
+        if let compressed = result.compressedState {
+            facts.append(.init(title: "Mode", value: compressed.mode))
+            if let next = compressed.nextLikelyAction {
+                facts.append(.init(title: "Next action", value: next))
+            }
+        }
+
+        return facts
+    }
+}
+
 struct PolicySummaryPresentation: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
@@ -285,6 +398,7 @@ struct PolicySummaryPresentation: Identifiable, Hashable, Sendable {
 struct RunActivityPresentation: Hashable, Sendable {
     let issues: [RunIssuePresentation]
     let approvals: [RuntimePermissionApprovalNoticePresentation]
+    let advisories: [CognitionAdvisoryPresentation]
     let progressMessages: [TaskRunProgressMessage]
     let tools: [ToolActivityPresentation]
     let files: [StoredFileChange]
@@ -301,10 +415,18 @@ struct RunActivityPresentation: Hashable, Sendable {
     ) {
         var issueRows: [RunIssuePresentation] = []
         var approvalRows: [RuntimePermissionApprovalNoticePresentation] = []
+        var advisoryRows: [CognitionAdvisoryPresentation] = []
         var technicalRows: [TechnicalOutputPresentation] = []
         let permissionSummaryPayload = notices.last(where: { $0.type == "astra.permission_summary" })?.payload
 
         for notice in notices where notice.type != "astra.permission_summary" {
+            if OperationalCognitionEventTypes.isCognitionEvent(notice.type) {
+                if let advisory = CognitionAdvisoryPresentation(notice: notice) {
+                    advisoryRows.append(advisory)
+                }
+                continue
+            }
+
             if notice.type == "permission.approval.requested" {
                 approvalRows.append(RuntimePermissionApprovalNoticePresentation(notice: notice))
                 continue
@@ -331,6 +453,7 @@ struct RunActivityPresentation: Hashable, Sendable {
 
         issues = issueRows
         approvals = approvalRows
+        advisories = advisoryRows
         self.progressMessages = progressMessages
         tools = Self.groupToolCalls(activity.toolCalls)
         files = activity.fileChanges
@@ -343,7 +466,7 @@ struct RunActivityPresentation: Hashable, Sendable {
     }
 
     var hasVisibleDetails: Bool {
-        !issues.isEmpty || !approvals.isEmpty || !progressMessages.isEmpty || !tools.isEmpty || !files.isEmpty || policy != nil || !technicalOutputs.isEmpty || !stats.isEmpty
+        !issues.isEmpty || !approvals.isEmpty || !advisories.isEmpty || !progressMessages.isEmpty || !tools.isEmpty || !files.isEmpty || policy != nil || !technicalOutputs.isEmpty || !stats.isEmpty
     }
 
     private static func groupToolCalls(_ calls: [TaskToolCall]) -> [ToolActivityPresentation] {

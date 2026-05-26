@@ -47,6 +47,8 @@ final class TaskEvent {
             return "system"
         case let t where t.hasPrefix("astra."):
             return "system"
+        case let t where t.hasPrefix("cognition."):
+            return "system"
         case let t where t.hasPrefix("team."):
             return "team"
         default:

@@ -51,6 +51,9 @@ enum AgentEventCompactor {
         if event.type.hasPrefix("astra.") {
             return true
         }
+        if event.type.hasPrefix("cognition.") {
+            return true
+        }
 
         switch event.type {
         case "user.message", "schedule.result", "system.info", "recap.result", "budget.warning":

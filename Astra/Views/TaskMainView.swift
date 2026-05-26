@@ -1884,6 +1884,19 @@ struct TaskMainView: View {
                 }
             }
 
+            if !presentation.advisories.isEmpty {
+                runActivityDetailSection(
+                    title: presentation.advisories.count == 1 ? "Advisory signal" : "Advisory signals",
+                    systemImage: "waveform.path.ecg"
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(presentation.advisories) { advisory in
+                            cognitionAdvisoryView(advisory)
+                        }
+                    }
+                }
+            }
+
             if !presentation.tools.isEmpty {
                 runActivityDetailSection(title: "Tool activity", systemImage: "wrench.and.screwdriver") {
                     toolActivityList(presentation.tools)
@@ -1994,6 +2007,9 @@ struct TaskMainView: View {
         if presentation.files.count > 0 {
             parts.append("\(presentation.files.count) \(presentation.files.count == 1 ? "file" : "files") changed")
         }
+        if !presentation.advisories.isEmpty {
+            parts.append("\(presentation.advisories.count) advisory \(presentation.advisories.count == 1 ? "signal" : "signals")")
+        }
         if presentation.policy != nil && !parts.contains(where: { $0.contains("policy") }) {
             parts.append("policy")
         }
@@ -2061,6 +2077,9 @@ struct TaskMainView: View {
         if notices.contains(where: { $0.type == "budget.warning" }) {
             return "exclamationmark.triangle"
         }
+        if notices.contains(where: { OperationalCognitionEventTypes.isCognitionEvent($0.type) }) {
+            return "waveform.path.ecg"
+        }
         return "list.bullet.rectangle"
     }
 
@@ -2076,6 +2095,9 @@ struct TaskMainView: View {
         }
         if notices.contains(where: { $0.type == "budget.warning" }) {
             return Stanford.poppy
+        }
+        if notices.contains(where: { OperationalCognitionEventTypes.isCognitionEvent($0.type) }) {
+            return Stanford.coolGrey
         }
         return Stanford.coolGrey
     }
@@ -2189,6 +2211,37 @@ struct TaskMainView: View {
             }
             if let rawPayload = issue.rawPayload, !rawPayload.isEmpty {
                 rawOutputDisclosure(rawPayload)
+                    .padding(.leading, 22)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func cognitionAdvisoryView(_ advisory: CognitionAdvisoryPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: issueIcon(advisory.severity))
+                    .font(Stanford.ui(12))
+                    .foregroundStyle(issueColor(advisory.severity))
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(advisory.title)
+                        .font(Stanford.chatSection())
+                        .foregroundStyle(issueColor(advisory.severity))
+                    Text(advisory.summary)
+                        .font(Stanford.chatSection())
+                        .foregroundStyle(Stanford.readingText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            if !advisory.facts.isEmpty {
+                factList(advisory.facts)
+                    .padding(.leading, 22)
+            }
+            if let rawPayload = advisory.rawPayload, !rawPayload.isEmpty {
+                rawOutputDisclosure(rawPayload, label: "Show advisory payload")
                     .padding(.leading, 22)
             }
         }

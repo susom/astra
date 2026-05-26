@@ -264,6 +264,7 @@ struct TimelineTabView: View {
         case "task.stats": return "chart.bar"
         case "budget.exceeded": return "exclamationmark.triangle"
         case "budget.warning": return "exclamationmark.triangle"
+        case let type where OperationalCognitionEventTypes.isCognitionEvent(type): return "waveform.path.ecg"
         case "error": return "xmark.circle"
         case "user.message": return "person.circle"
         default: return "circle"
@@ -283,6 +284,7 @@ struct TimelineTabView: View {
         case "task.stats": return Stanford.sky
         case "budget.exceeded": return Stanford.failed
         case "budget.warning": return Stanford.poppy
+        case let type where OperationalCognitionEventTypes.isCognitionEvent(type): return Stanford.coolGrey
         case "error": return Stanford.failed
         case "user.message": return Stanford.bay
         default: return Stanford.coolGrey
@@ -302,6 +304,10 @@ struct TimelineTabView: View {
         case "task.stats": return "Stats"
         case "budget.exceeded": return "Budget Exceeded"
         case "budget.warning": return "Budget Warning"
+        case OperationalCognitionEventTypes.runSummary: return "Advisory Run Summary"
+        case OperationalCognitionEventTypes.taskHealth: return "Advisory Task Health"
+        case OperationalCognitionEventTypes.attentionSignal: return "Advisory Attention Signal"
+        case OperationalCognitionEventTypes.stateCompressed: return "Advisory State"
         case "error": return "Error"
         case "user.message": return "You"
         default: return type
