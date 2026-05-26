@@ -415,6 +415,115 @@ struct LocalCognitionDiagnosticsPresentation: Identifiable, Hashable, Sendable {
     }
 }
 
+struct LocalCognitionAIReviewInsightPresentation: Identifiable, Hashable, Sendable {
+    let id: String
+    let title: String
+    let summary: String
+    let facts: [RunFactPresentation]
+
+    init?(job: LocalCognitionJobDiagnostics) {
+        let summary = job.localSummary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard job.status == .success, !summary.isEmpty else {
+            return nil
+        }
+
+        id = job.kind.rawValue
+        title = Self.kindTitle(job.kind)
+        self.summary = summary
+        var rowFacts: [RunFactPresentation] = []
+        if let deterministic = job.deterministicSummary?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !deterministic.isEmpty,
+           deterministic != summary {
+            rowFacts.append(.init(title: "Baseline", value: deterministic))
+        }
+        let materialChanges = job.changedFields.filter { !Self.nonMaterialFields.contains($0) }
+        if !materialChanges.isEmpty {
+            rowFacts.append(.init(title: "AI changed", value: compactList(materialChanges, limit: 5)))
+        }
+        if let latency = job.latencyMilliseconds {
+            rowFacts.append(.init(title: "Latency", value: Self.latencyLabel(latency)))
+        }
+        facts = rowFacts
+    }
+
+    private static let nonMaterialFields: Set<String> = ["summary", "confidence", "provenance"]
+
+    private static func kindTitle(_ kind: OperationalCognitionJobKind) -> String {
+        switch kind {
+        case .runSummary:
+            "Run"
+        case .taskHealth:
+            "Health"
+        case .attentionSignal:
+            "Attention"
+        case .stateCompression:
+            "State"
+        }
+    }
+
+    private static func latencyLabel(_ milliseconds: Int) -> String {
+        if milliseconds < 1_000 {
+            return "\(milliseconds)ms"
+        }
+        return String(format: "%.2fs", Double(milliseconds) / 1_000)
+    }
+}
+
+struct LocalCognitionAIReviewPresentation: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let title: String
+    let summary: String
+    let severity: RunActivitySeverity
+    let facts: [RunFactPresentation]
+    let insights: [LocalCognitionAIReviewInsightPresentation]
+
+    init?(notice: TaskRunNotice) {
+        guard let diagnostics = LocalCognitionRunDiagnostics.decodePayload(notice.payload) else {
+            return nil
+        }
+
+        let insightRows = diagnostics.jobs.compactMap(LocalCognitionAIReviewInsightPresentation.init)
+        guard !insightRows.isEmpty else {
+            return nil
+        }
+
+        id = notice.id
+        title = "AI review"
+        insights = insightRows
+        summary = Self.primarySummary(from: diagnostics, insights: insightRows)
+        severity = diagnostics.fallbackJobCount > 0 ? .warning : .info
+        facts = [
+            .init(title: "Model", value: diagnostics.model),
+            .init(title: "Provider", value: diagnostics.providerID),
+            .init(title: "Local jobs", value: String(diagnostics.successfulJobCount)),
+            .init(title: "Fallbacks", value: String(diagnostics.fallbackJobCount)),
+            .init(title: "Latency", value: Self.latencyLabel(diagnostics.totalLatencyMilliseconds))
+        ]
+    }
+
+    private static func primarySummary(
+        from diagnostics: LocalCognitionRunDiagnostics,
+        insights: [LocalCognitionAIReviewInsightPresentation]
+    ) -> String {
+        if let health = diagnostics.jobs.first(where: { $0.kind == .taskHealth })?.localSummary,
+           !health.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return health
+        }
+        if let run = diagnostics.jobs.first(where: { $0.kind == .runSummary })?.localSummary,
+           !run.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return run
+        }
+        return insights[0].summary
+    }
+
+    private static func latencyLabel(_ milliseconds: Int) -> String {
+        if milliseconds < 1_000 {
+            return "\(milliseconds)ms"
+        }
+        return String(format: "%.2fs", Double(milliseconds) / 1_000)
+    }
+}
+
 struct PolicySummaryPresentation: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
@@ -536,6 +645,7 @@ struct PolicySummaryPresentation: Identifiable, Hashable, Sendable {
 struct RunActivityPresentation: Hashable, Sendable {
     let issues: [RunIssuePresentation]
     let approvals: [RuntimePermissionApprovalNoticePresentation]
+    let aiReviews: [LocalCognitionAIReviewPresentation]
     let advisories: [CognitionAdvisoryPresentation]
     let cognitionDiagnostics: [LocalCognitionDiagnosticsPresentation]
     let progressMessages: [TaskRunProgressMessage]
@@ -554,6 +664,7 @@ struct RunActivityPresentation: Hashable, Sendable {
     ) {
         var issueRows: [RunIssuePresentation] = []
         var approvalRows: [RuntimePermissionApprovalNoticePresentation] = []
+        var aiReviewRows: [LocalCognitionAIReviewPresentation] = []
         var advisoryRows: [CognitionAdvisoryPresentation] = []
         var cognitionDiagnosticRows: [LocalCognitionDiagnosticsPresentation] = []
         var technicalRows: [TechnicalOutputPresentation] = []
@@ -561,6 +672,9 @@ struct RunActivityPresentation: Hashable, Sendable {
 
         for notice in notices where notice.type != "astra.permission_summary" {
             if notice.type == OperationalCognitionEventTypes.localDiagnostics {
+                if let review = LocalCognitionAIReviewPresentation(notice: notice) {
+                    aiReviewRows.append(review)
+                }
                 if let diagnostics = LocalCognitionDiagnosticsPresentation(notice: notice) {
                     cognitionDiagnosticRows.append(diagnostics)
                 }
@@ -600,6 +714,7 @@ struct RunActivityPresentation: Hashable, Sendable {
 
         issues = issueRows
         approvals = approvalRows
+        aiReviews = aiReviewRows
         advisories = advisoryRows
         cognitionDiagnostics = cognitionDiagnosticRows
         self.progressMessages = progressMessages
@@ -614,7 +729,7 @@ struct RunActivityPresentation: Hashable, Sendable {
     }
 
     var hasVisibleDetails: Bool {
-        !issues.isEmpty || !approvals.isEmpty || !advisories.isEmpty || !cognitionDiagnostics.isEmpty || !progressMessages.isEmpty || !tools.isEmpty || !files.isEmpty || policy != nil || !technicalOutputs.isEmpty || !stats.isEmpty
+        !issues.isEmpty || !approvals.isEmpty || !aiReviews.isEmpty || !advisories.isEmpty || !cognitionDiagnostics.isEmpty || !progressMessages.isEmpty || !tools.isEmpty || !files.isEmpty || policy != nil || !technicalOutputs.isEmpty || !stats.isEmpty
     }
 
     private static func groupToolCalls(_ calls: [TaskToolCall]) -> [ToolActivityPresentation] {

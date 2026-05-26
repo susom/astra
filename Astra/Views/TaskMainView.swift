@@ -1884,6 +1884,19 @@ struct TaskMainView: View {
                 }
             }
 
+            if !presentation.aiReviews.isEmpty {
+                runActivityDetailSection(
+                    title: presentation.aiReviews.count == 1 ? "AI review" : "AI reviews",
+                    systemImage: "sparkles"
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(presentation.aiReviews) { review in
+                            localCognitionAIReviewView(review)
+                        }
+                    }
+                }
+            }
+
             if !presentation.advisories.isEmpty {
                 runActivityDetailSection(
                     title: presentation.advisories.count == 1 ? "Advisory signal" : "Advisory signals",
@@ -2019,6 +2032,9 @@ struct TaskMainView: View {
         }
         if presentation.files.count > 0 {
             parts.append("\(presentation.files.count) \(presentation.files.count == 1 ? "file" : "files") changed")
+        }
+        if !presentation.aiReviews.isEmpty {
+            parts.append("AI review")
         }
         if !presentation.advisories.isEmpty {
             parts.append("\(presentation.advisories.count) advisory \(presentation.advisories.count == 1 ? "signal" : "signals")")
@@ -2259,6 +2275,66 @@ struct TaskMainView: View {
             if let rawPayload = advisory.rawPayload, !rawPayload.isEmpty {
                 rawOutputDisclosure(rawPayload, label: "Show advisory payload")
                     .padding(.leading, 22)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func localCognitionAIReviewView(_ review: LocalCognitionAIReviewPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(Stanford.ui(12))
+                    .foregroundStyle(review.severity == .warning ? Stanford.poppy : Stanford.lagunita)
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(review.title)
+                        .font(Stanford.chatSection())
+                        .foregroundStyle(review.severity == .warning ? Stanford.poppy : Stanford.lagunita)
+                    Text(review.summary)
+                        .font(Stanford.chatSection())
+                        .foregroundStyle(Stanford.readingText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            if !review.facts.isEmpty {
+                factList(review.facts)
+                    .padding(.leading, 22)
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(review.insights) { insight in
+                    localCognitionAIInsightView(insight)
+                }
+            }
+            .padding(.leading, 22)
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func localCognitionAIInsightView(_ insight: LocalCognitionAIReviewInsightPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: "quote.bubble")
+                    .font(Stanford.ui(11))
+                    .foregroundStyle(Stanford.coolGrey)
+                    .frame(width: 13)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(insight.title)
+                        .font(Stanford.chatMeta())
+                        .foregroundStyle(Stanford.black)
+                    Text(insight.summary)
+                        .font(Stanford.chatMeta())
+                        .foregroundStyle(Stanford.readingText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            if !insight.facts.isEmpty {
+                factList(insight.facts)
+                    .padding(.leading, 20)
             }
         }
         .padding(.vertical, 1)
