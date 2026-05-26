@@ -51,6 +51,8 @@ struct OperationalCognitionServiceTests {
 
         #expect(summary.advisory)
         #expect(summary.kind == .runSummary)
+        #expect(summary.provenance.providerID == DeterministicCognitionProvider.id)
+        #expect(summary.provenance.method == OperationalCognitionService.method)
         #expect(summary.runSummary?.filesChanged == ["/tmp/report.md"])
         #expect(summary.runSummary?.tokenCount == 123)
         #expect(health.taskHealth?.state == .completed)
@@ -146,6 +148,70 @@ struct OperationalCognitionServiceTests {
         #expect(task.events.filter { $0.type == OperationalCognitionEventTypes.stateCompressed }.count == 1)
     }
 
+    @Test("post-run runtime builds typed advisory cognition jobs")
+    func postRunRuntimeBuildsTypedAdvisoryJobs() {
+        let taskID = UUID()
+        let runID = UUID()
+        let requestedAt = Date(timeIntervalSince1970: 12)
+
+        let jobs = OperationalCognitionRuntime.postRunJobs(taskID: taskID, runID: runID, requestedAt: requestedAt)
+
+        #expect(jobs.map(\.kind) == [.runSummary, .taskHealth, .attentionSignal, .stateCompression])
+        #expect(jobs.map(\.sourceScope) == [.run, .task, .run, .task])
+        #expect(jobs.allSatisfy { $0.advisory })
+        #expect(jobs.allSatisfy { $0.taskID == taskID && $0.runID == runID && $0.requestedAt == requestedAt })
+    }
+
+    @Test("provider failures do not mutate task state or persist cognition events")
+    func providerFailuresDoNotMutateTaskStateOrPersistEvents() throws {
+        let container = try makeOperationalCognitionContainer()
+        let context = container.mainContext
+        let task = AgentTask(title: "Provider failure", goal: "Complete safely")
+        task.status = .completed
+        let run = TaskRun(task: task)
+        run.status = .completed
+        run.stopReason = "completed"
+        run.completedAt = Date()
+        context.insert(task)
+        context.insert(run)
+
+        let runtime = OperationalCognitionRuntime(provider: ThrowingCognitionProvider())
+        OperationalCognitionService.recordPostRunAdvisories(
+            task: task,
+            run: run,
+            modelContext: context,
+            runtime: runtime
+        )
+
+        #expect(task.status == .completed)
+        #expect(run.status == .completed)
+        #expect(!task.events.contains { OperationalCognitionEventTypes.isCognitionEvent($0.type) })
+    }
+
+    @Test("runtime rejects non-advisory provider results")
+    func runtimeRejectsNonAdvisoryProviderResults() throws {
+        let container = try makeOperationalCognitionContainer()
+        let context = container.mainContext
+        let task = AgentTask(title: "Non advisory", goal: "Stay authoritative")
+        task.status = .completed
+        let run = TaskRun(task: task)
+        run.status = .completed
+        run.stopReason = "completed"
+        run.completedAt = Date()
+        context.insert(task)
+        context.insert(run)
+
+        let runtime = OperationalCognitionRuntime(provider: NonAdvisoryCognitionProvider())
+        OperationalCognitionService.recordPostRunAdvisories(
+            task: task,
+            run: run,
+            modelContext: context,
+            runtime: runtime
+        )
+
+        #expect(!task.events.contains { OperationalCognitionEventTypes.isCognitionEvent($0.type) })
+    }
+
     @Test("compaction preserves cognition events")
     func compactionPreservesCognitionEvents() throws {
         let container = try makeOperationalCognitionContainer()
@@ -201,5 +267,36 @@ struct OperationalCognitionServiceTests {
     private func cognitionResult(task: AgentTask, type: String) throws -> CognitionJobResult {
         let event = try #require(task.events.first { $0.type == type })
         return try #require(CognitionJobResult.decodePayload(event.payload))
+    }
+}
+
+private enum TestCognitionProviderError: Error {
+    case failed
+}
+
+@MainActor
+private struct ThrowingCognitionProvider: OperationalCognitionProvider {
+    let providerID = "test.throwing"
+    let method = "throwing-test"
+
+    func result(for _: CognitionJob, context _: OperationalCognitionJobContext) throws -> CognitionJobResult? {
+        throw TestCognitionProviderError.failed
+    }
+}
+
+@MainActor
+private struct NonAdvisoryCognitionProvider: OperationalCognitionProvider {
+    let providerID = "test.non-advisory"
+    let method = "non-advisory-test"
+
+    func result(for job: CognitionJob, context: OperationalCognitionJobContext) throws -> CognitionJobResult? {
+        CognitionJobResult(
+            kind: job.kind,
+            advisory: false,
+            generatedAt: context.generatedAt,
+            confidence: 1.0,
+            summary: "Non-advisory result should be rejected.",
+            provenance: context.provenance(for: job, provider: self)
+        )
     }
 }

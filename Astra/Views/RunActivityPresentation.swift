@@ -237,6 +237,9 @@ struct CognitionAdvisoryPresentation: Identifiable, Hashable, Sendable {
             .init(title: "Method", value: result.provenance.method),
             .init(title: "Source events", value: String(result.provenance.sourceEventCount))
         ]
+        if let providerID = result.provenance.providerID {
+            facts.append(.init(title: "Provider", value: providerID))
+        }
 
         if let health = result.taskHealth {
             facts.append(.init(title: "State", value: health.state.rawValue))

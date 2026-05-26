@@ -38,6 +38,39 @@ public enum OperationalCognitionJobKind: String, Codable, CaseIterable, Sendable
     }
 }
 
+public enum CognitionJobSourceScope: String, Codable, Sendable, Equatable, Hashable {
+    case run
+    case task
+}
+
+public struct CognitionJob: Codable, Hashable, Identifiable, Sendable {
+    public let id: UUID
+    public let kind: OperationalCognitionJobKind
+    public let taskID: UUID
+    public let runID: UUID?
+    public let sourceScope: CognitionJobSourceScope
+    public let requestedAt: Date
+    public let advisory: Bool
+
+    public init(
+        id: UUID = UUID(),
+        kind: OperationalCognitionJobKind,
+        taskID: UUID,
+        runID: UUID?,
+        sourceScope: CognitionJobSourceScope,
+        requestedAt: Date,
+        advisory: Bool = true
+    ) {
+        self.id = id
+        self.kind = kind
+        self.taskID = taskID
+        self.runID = runID
+        self.sourceScope = sourceScope
+        self.requestedAt = requestedAt
+        self.advisory = advisory
+    }
+}
+
 public struct CognitionProvenance: Codable, Hashable, Sendable {
     public let taskID: UUID
     public let runID: UUID?
@@ -49,6 +82,7 @@ public struct CognitionProvenance: Codable, Hashable, Sendable {
     public let runtimeID: String?
     public let model: String?
     public let method: String
+    public let providerID: String?
 
     public init(
         taskID: UUID,
@@ -60,7 +94,8 @@ public struct CognitionProvenance: Codable, Hashable, Sendable {
         sourceCompletedAt: Date?,
         runtimeID: String?,
         model: String?,
-        method: String
+        method: String,
+        providerID: String? = nil
     ) {
         self.taskID = taskID
         self.runID = runID
@@ -72,6 +107,7 @@ public struct CognitionProvenance: Codable, Hashable, Sendable {
         self.runtimeID = runtimeID
         self.model = model
         self.method = method
+        self.providerID = providerID
     }
 }
 

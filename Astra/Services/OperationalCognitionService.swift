@@ -3,105 +3,53 @@ import SwiftData
 import ASTRACore
 
 @MainActor
-enum OperationalCognitionService {
-    static let method = "deterministic-rules-v1"
+protocol OperationalCognitionProvider {
+    var providerID: String { get }
+    var method: String { get }
 
-    static func recordPostRunAdvisories(
-        task: AgentTask,
-        run: TaskRun,
-        modelContext: ModelContext,
-        generatedAt: Date = Date()
-    ) {
-        let runEvents = sourceEvents(for: task, run: run)
-        let allTaskEvents = sourceEvents(for: task, run: nil)
-        let runProvenance = provenance(
-            task: task,
-            run: run,
-            events: runEvents,
-            generatedAt: generatedAt
-        )
-        let taskProvenance = provenance(
-            task: task,
-            run: run,
-            events: allTaskEvents,
-            generatedAt: generatedAt
-        )
-        let runSummary = makeRunSummary(task: task, run: run, events: runEvents)
+    func result(for job: CognitionJob, context: OperationalCognitionJobContext) throws -> CognitionJobResult?
+}
 
-        insertResultIfNeeded(
-            makeRunSummaryResult(
-                task: task,
-                run: run,
-                runSummary: runSummary,
-                provenance: runProvenance,
-                generatedAt: generatedAt
-            ),
-            task: task,
-            run: run,
-            modelContext: modelContext
-        )
+@MainActor
+struct OperationalCognitionJobContext {
+    let task: AgentTask
+    let run: TaskRun
+    let generatedAt: Date
+    let runEvents: [TaskEvent]
+    let taskEvents: [TaskEvent]
 
-        insertResultIfNeeded(
-            makeTaskHealthResult(
-                task: task,
-                run: run,
-                runSummary: runSummary,
-                events: allTaskEvents,
-                provenance: taskProvenance,
-                generatedAt: generatedAt
-            ),
-            task: task,
-            run: run,
-            modelContext: modelContext
-        )
-
-        if let attention = makeAttentionResult(
-            task: task,
-            run: run,
-            events: runEvents,
-            provenance: runProvenance,
-            generatedAt: generatedAt
-        ) {
-            insertResultIfNeeded(attention, task: task, run: run, modelContext: modelContext)
-        }
-
-        insertResultIfNeeded(
-            makeCompressedStateResult(
-                task: task,
-                run: run,
-                runSummary: runSummary,
-                events: allTaskEvents,
-                provenance: taskProvenance,
-                generatedAt: generatedAt
-            ),
-            task: task,
-            run: run,
-            modelContext: modelContext
-        )
+    init(task: AgentTask, run: TaskRun, generatedAt: Date) {
+        self.task = task
+        self.run = run
+        self.generatedAt = generatedAt
+        runEvents = Self.sourceEvents(for: task, run: run)
+        taskEvents = Self.sourceEvents(for: task, run: nil)
     }
 
-    static func decodeResult(from payload: String) -> CognitionJobResult? {
-        CognitionJobResult.decodePayload(payload)
+    func events(for job: CognitionJob) -> [TaskEvent] {
+        switch job.sourceScope {
+        case .run:
+            runEvents
+        case .task:
+            taskEvents
+        }
     }
 
-    private static func insertResultIfNeeded(
-        _ result: CognitionJobResult,
-        task: AgentTask,
-        run: TaskRun,
-        modelContext: ModelContext
-    ) {
-        let eventType = result.kind.eventType
-        guard !task.events.contains(where: { $0.type == eventType && $0.run?.id == run.id }) else {
-            return
-        }
-        guard let payload = result.encodedPayload() else {
-            AppLogger.audit(.runtimePersistenceSummary, category: "Cognition", taskID: task.id, fields: [
-                "result": "encode_failed",
-                "kind": result.kind.rawValue
-            ], level: .warning)
-            return
-        }
-        modelContext.insert(TaskEvent(task: task, type: eventType, payload: payload, run: run))
+    func provenance(for job: CognitionJob, provider: any OperationalCognitionProvider) -> CognitionProvenance {
+        let sourceEvents = events(for: job)
+        return CognitionProvenance(
+            taskID: task.id,
+            runID: run.id,
+            sourceEventIDs: sourceEvents.map(\.id),
+            sourceEventTypes: Array(Set(sourceEvents.map(\.type))).sorted(),
+            sourceEventCount: sourceEvents.count,
+            sourceStartedAt: run.startedAt,
+            sourceCompletedAt: run.completedAt,
+            runtimeID: run.runtimeID ?? task.runtimeID,
+            model: task.model,
+            method: provider.method,
+            providerID: provider.providerID
+        )
     }
 
     private static func sourceEvents(for task: AgentTask, run: TaskRun?) -> [TaskEvent] {
@@ -115,28 +63,172 @@ enum OperationalCognitionService {
             }
             .sorted { $0.timestamp < $1.timestamp }
     }
+}
 
-    private static func provenance(
-        task: AgentTask,
-        run: TaskRun,
-        events: [TaskEvent],
-        generatedAt _: Date
-    ) -> CognitionProvenance {
-        CognitionProvenance(
-            taskID: task.id,
-            runID: run.id,
-            sourceEventIDs: events.map(\.id),
-            sourceEventTypes: Array(Set(events.map(\.type))).sorted(),
-            sourceEventCount: events.count,
-            sourceStartedAt: run.startedAt,
-            sourceCompletedAt: run.completedAt,
-            runtimeID: run.runtimeID ?? task.runtimeID,
-            model: task.model,
-            method: method
-        )
+@MainActor
+struct OperationalCognitionRuntime {
+    let provider: any OperationalCognitionProvider
+
+    init(provider: any OperationalCognitionProvider) {
+        self.provider = provider
     }
 
-    private static func makeRunSummary(task _: AgentTask, run: TaskRun, events: [TaskEvent]) -> CognitionRunSummary {
+    static var `default`: OperationalCognitionRuntime {
+        OperationalCognitionRuntime(provider: DeterministicCognitionProvider())
+    }
+
+    static func postRunJobs(taskID: UUID, runID: UUID, requestedAt: Date) -> [CognitionJob] {
+        [
+            CognitionJob(kind: .runSummary, taskID: taskID, runID: runID, sourceScope: .run, requestedAt: requestedAt),
+            CognitionJob(kind: .taskHealth, taskID: taskID, runID: runID, sourceScope: .task, requestedAt: requestedAt),
+            CognitionJob(kind: .attentionSignal, taskID: taskID, runID: runID, sourceScope: .run, requestedAt: requestedAt),
+            CognitionJob(kind: .stateCompression, taskID: taskID, runID: runID, sourceScope: .task, requestedAt: requestedAt)
+        ]
+    }
+
+    func recordPostRunAdvisories(
+        task: AgentTask,
+        run: TaskRun,
+        modelContext: ModelContext,
+        generatedAt: Date = Date()
+    ) {
+        let context = OperationalCognitionJobContext(task: task, run: run, generatedAt: generatedAt)
+        for job in Self.postRunJobs(taskID: task.id, runID: run.id, requestedAt: generatedAt) {
+            execute(job: job, context: context, modelContext: modelContext)
+        }
+    }
+
+    private func execute(
+        job: CognitionJob,
+        context: OperationalCognitionJobContext,
+        modelContext: ModelContext
+    ) {
+        guard job.advisory else {
+            auditDrop(job: job, task: context.task, reason: "non_advisory_job", detail: nil)
+            return
+        }
+
+        let result: CognitionJobResult?
+        do {
+            result = try provider.result(for: job, context: context)
+        } catch {
+            auditDrop(
+                job: job,
+                task: context.task,
+                reason: "provider_failed",
+                detail: String(describing: error)
+            )
+            return
+        }
+
+        guard let result else { return }
+        guard result.advisory else {
+            auditDrop(job: job, task: context.task, reason: "non_advisory_result", detail: nil)
+            return
+        }
+        guard result.kind == job.kind else {
+            auditDrop(
+                job: job,
+                task: context.task,
+                reason: "kind_mismatch",
+                detail: result.kind.rawValue
+            )
+            return
+        }
+
+        insertResultIfNeeded(result, task: context.task, run: context.run, modelContext: modelContext)
+    }
+
+    private func insertResultIfNeeded(
+        _ result: CognitionJobResult,
+        task: AgentTask,
+        run: TaskRun,
+        modelContext: ModelContext
+    ) {
+        let eventType = result.kind.eventType
+        guard !task.events.contains(where: { $0.type == eventType && $0.run?.id == run.id }) else {
+            return
+        }
+        guard let payload = result.encodedPayload() else {
+            auditDrop(jobKind: result.kind, task: task, reason: "encode_failed", detail: nil)
+            return
+        }
+        modelContext.insert(TaskEvent(task: task, type: eventType, payload: payload, run: run))
+    }
+
+    private func auditDrop(job: CognitionJob, task: AgentTask, reason: String, detail: String?) {
+        auditDrop(jobKind: job.kind, task: task, reason: reason, detail: detail)
+    }
+
+    private func auditDrop(jobKind: OperationalCognitionJobKind, task: AgentTask, reason: String, detail: String?) {
+        var fields = [
+            "result": reason,
+            "kind": jobKind.rawValue,
+            "provider": provider.providerID,
+            "method": provider.method
+        ]
+        if let detail, !detail.isEmpty {
+            fields["detail"] = detail
+        }
+        AppLogger.audit(
+            .runtimePersistenceSummary,
+            category: "Cognition",
+            taskID: task.id,
+            fields: fields,
+            level: .warning
+        )
+    }
+}
+
+struct DeterministicCognitionProvider: OperationalCognitionProvider {
+    static let id = "astra.deterministic"
+    static let methodName = "deterministic-rules-v1"
+
+    var providerID: String { Self.id }
+    var method: String { Self.methodName }
+
+    func result(for job: CognitionJob, context: OperationalCognitionJobContext) throws -> CognitionJobResult? {
+        let runSummary = makeRunSummary(run: context.run, events: context.runEvents)
+        let provenance = context.provenance(for: job, provider: self)
+
+        switch job.kind {
+        case .runSummary:
+            return makeRunSummaryResult(
+                run: context.run,
+                runSummary: runSummary,
+                provenance: provenance,
+                generatedAt: context.generatedAt
+            )
+        case .taskHealth:
+            return makeTaskHealthResult(
+                task: context.task,
+                run: context.run,
+                runSummary: runSummary,
+                events: context.taskEvents,
+                provenance: provenance,
+                generatedAt: context.generatedAt
+            )
+        case .attentionSignal:
+            return makeAttentionResult(
+                task: context.task,
+                run: context.run,
+                events: context.runEvents,
+                provenance: provenance,
+                generatedAt: context.generatedAt
+            )
+        case .stateCompression:
+            return makeCompressedStateResult(
+                task: context.task,
+                run: context.run,
+                runSummary: runSummary,
+                events: context.taskEvents,
+                provenance: provenance,
+                generatedAt: context.generatedAt
+            )
+        }
+    }
+
+    private func makeRunSummary(run: TaskRun, events: [TaskEvent]) -> CognitionRunSummary {
         let issueTypes: Set<String> = ["error", "budget.exceeded", "permission.denied", "permission.approval.requested"]
         let output = boundedMultiline(run.output, maxCharacters: 700)
         return CognitionRunSummary(
@@ -155,8 +247,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func makeRunSummaryResult(
-        task _: AgentTask,
+    private func makeRunSummaryResult(
         run: TaskRun,
         runSummary: CognitionRunSummary,
         provenance: CognitionProvenance,
@@ -173,7 +264,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func makeTaskHealthResult(
+    private func makeTaskHealthResult(
         task: AgentTask,
         run: TaskRun,
         runSummary: CognitionRunSummary,
@@ -192,7 +283,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func makeAttentionResult(
+    private func makeAttentionResult(
         task: AgentTask,
         run: TaskRun,
         events: [TaskEvent],
@@ -212,7 +303,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func makeCompressedStateResult(
+    private func makeCompressedStateResult(
         task: AgentTask,
         run: TaskRun,
         runSummary: CognitionRunSummary,
@@ -231,7 +322,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func makeHealth(
+    private func makeHealth(
         task: AgentTask,
         run: TaskRun,
         runSummary: CognitionRunSummary,
@@ -310,7 +401,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func makeAttentionSignal(
+    private func makeAttentionSignal(
         task: AgentTask,
         run: TaskRun,
         events: [TaskEvent]
@@ -375,7 +466,7 @@ enum OperationalCognitionService {
         return nil
     }
 
-    private static func makeCompressedState(
+    private func makeCompressedState(
         task: AgentTask,
         run: TaskRun,
         runSummary: CognitionRunSummary,
@@ -396,7 +487,7 @@ enum OperationalCognitionService {
         )
     }
 
-    private static func pendingAction(events: [TaskEvent]) -> String {
+    private func pendingAction(events: [TaskEvent]) -> String {
         if latestEvent(ofType: "permission.approval.requested", in: events) != nil {
             return "Review the permission request and decide whether to grant it for this run."
         }
@@ -406,7 +497,7 @@ enum OperationalCognitionService {
         return "Review the latest message or error, then provide guidance or retry."
     }
 
-    private static func nextLikelyAction(task: AgentTask, run: TaskRun, events: [TaskEvent]) -> String? {
+    private func nextLikelyAction(task: AgentTask, run: TaskRun, events: [TaskEvent]) -> String? {
         if task.status == .pendingUser {
             return pendingAction(events: events)
         }
@@ -422,7 +513,7 @@ enum OperationalCognitionService {
         return nil
     }
 
-    private static func runSummarySentence(run: TaskRun, runSummary: CognitionRunSummary) -> String {
+    private func runSummarySentence(run: TaskRun, runSummary: CognitionRunSummary) -> String {
         var parts = ["Run \(run.status.rawValue.replacingOccurrences(of: "_", with: " "))"]
         if !run.stopReason.isEmpty {
             parts.append("stop reason \(run.stopReason.replacingOccurrences(of: "_", with: " "))")
@@ -436,17 +527,17 @@ enum OperationalCognitionService {
         return parts.joined(separator: "; ") + "."
     }
 
-    private static func latestIssueEvent(in events: [TaskEvent]) -> TaskEvent? {
+    private func latestIssueEvent(in events: [TaskEvent]) -> TaskEvent? {
         events.last { event in
             ["permission.approval.requested", "error", "budget.exceeded", "permission.denied"].contains(event.type)
         }
     }
 
-    private static func latestEvent(ofType type: String, in events: [TaskEvent]) -> TaskEvent? {
+    private func latestEvent(ofType type: String, in events: [TaskEvent]) -> TaskEvent? {
         events.last { $0.type == type }
     }
 
-    private static func boundedInline(_ text: String, maxCharacters: Int) -> String {
+    private func boundedInline(_ text: String, maxCharacters: Int) -> String {
         let cleaned = text
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\t", with: " ")
@@ -455,13 +546,13 @@ enum OperationalCognitionService {
         return String(cleaned.prefix(maxCharacters)) + "..."
     }
 
-    private static func boundedMultiline(_ text: String, maxCharacters: Int) -> String {
+    private func boundedMultiline(_ text: String, maxCharacters: Int) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > maxCharacters else { return trimmed }
         return String(trimmed.prefix(maxCharacters)) + "..."
     }
 
-    private static func uniquePreservingOrder(_ values: [String], limit: Int) -> [String] {
+    private func uniquePreservingOrder(_ values: [String], limit: Int) -> [String] {
         var seen = Set<String>()
         var result: [String] = []
         for value in values {
@@ -471,5 +562,30 @@ enum OperationalCognitionService {
             if result.count >= limit { break }
         }
         return result
+    }
+}
+
+@MainActor
+enum OperationalCognitionService {
+    static let method = DeterministicCognitionProvider.methodName
+
+    static func recordPostRunAdvisories(
+        task: AgentTask,
+        run: TaskRun,
+        modelContext: ModelContext,
+        generatedAt: Date = Date(),
+        runtime: OperationalCognitionRuntime? = nil
+    ) {
+        let activeRuntime = runtime ?? .default
+        activeRuntime.recordPostRunAdvisories(
+            task: task,
+            run: run,
+            modelContext: modelContext,
+            generatedAt: generatedAt
+        )
+    }
+
+    static func decodeResult(from payload: String) -> CognitionJobResult? {
+        CognitionJobResult.decodePayload(payload)
     }
 }
