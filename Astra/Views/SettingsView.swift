@@ -30,6 +30,11 @@ struct SettingsView: View {
     @AppStorage(AppStorageKeys.claudeVertexHaikuModel) private var claudeVertexHaikuModel = ""
     @AppStorage(AppStorageKeys.claudeAvailableModels) private var claudeAvailableModels = ""
     @AppStorage(AppStorageKeys.copilotAvailableModels) private var copilotAvailableModels = ""
+    @AppStorage(AppStorageKeys.localCognitionEnabled) private var localCognitionEnabled = false
+    @AppStorage(AppStorageKeys.localCognitionBaseURL) private var localCognitionBaseURL = LocalOpenAICompatibleCognitionConfiguration.lmStudioDefaultBaseURL
+    @AppStorage(AppStorageKeys.localCognitionModel) private var localCognitionModel = LocalOpenAICompatibleCognitionConfiguration.defaultModel
+    @AppStorage(AppStorageKeys.localCognitionTimeoutSeconds) private var localCognitionTimeoutSeconds = Int(LocalOpenAICompatibleCognitionConfiguration.defaultTimeoutSeconds)
+    @AppStorage(AppStorageKeys.localCognitionMaxTokens) private var localCognitionMaxTokens = LocalOpenAICompatibleCognitionConfiguration.defaultMaxTokens
 
     private let budgetPresets = TaskExecutionDefaults.budgetPresets
 
@@ -200,6 +205,50 @@ struct SettingsView: View {
                 )
 
                 Text("Copilot uses your GitHub Copilot account and may consume Copilot premium requests.")
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Operational Cognition") {
+                Toggle("Use Local Advisory Model", isOn: $localCognitionEnabled)
+                Text("When enabled, ASTRA asks a local OpenAI-compatible endpoint for advisory cognition payloads and falls back to deterministic advisories if the endpoint fails.")
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+
+                TextField("Base URL", text: $localCognitionBaseURL, prompt: Text(LocalOpenAICompatibleCognitionConfiguration.lmStudioDefaultBaseURL))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!localCognitionEnabled)
+                TextField("Model", text: $localCognitionModel, prompt: Text(LocalOpenAICompatibleCognitionConfiguration.defaultModel))
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!localCognitionEnabled)
+
+                HStack {
+                    Text("Timeout")
+                    Spacer()
+                    TextField("", value: $localCognitionTimeoutSeconds, format: .number, prompt: Text("20"))
+                        .labelsHidden()
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                    Text("seconds")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                .disabled(!localCognitionEnabled)
+
+                HStack {
+                    Text("Max Output")
+                    Spacer()
+                    TextField("", value: $localCognitionMaxTokens, format: .number, prompt: Text("512"))
+                        .labelsHidden()
+                        .frame(width: 80)
+                        .multilineTextAlignment(.trailing)
+                    Text("tokens")
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                .disabled(!localCognitionEnabled)
+
+                Text("LM Studio headless default: run `lms server start`, load a model with identifier `astra-cognition`, then keep this URL on `http://localhost:1234/v1`.")
                     .font(Stanford.caption(12))
                     .foregroundStyle(.secondary)
             }

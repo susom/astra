@@ -212,6 +212,100 @@ struct OperationalCognitionServiceTests {
         #expect(!task.events.contains { OperationalCognitionEventTypes.isCognitionEvent($0.type) })
     }
 
+    @Test("local OpenAI provider sends JSON schema request and merges advisory output")
+    func localOpenAIProviderSendsSchemaRequestAndMergesOutput() async throws {
+        let taskID = UUID()
+        let runID = UUID()
+        let job = CognitionJob(
+            kind: .stateCompression,
+            taskID: taskID,
+            runID: runID,
+            sourceScope: .task,
+            requestedAt: Date(timeIntervalSince1970: 100)
+        )
+        let base = baseStateCompressionResult(taskID: taskID, runID: runID)
+        let snapshot = localSnapshot(taskID: taskID, runID: runID)
+        let http = StubLocalCognitionHTTPClient(response: chatCompletionResponse(content: #"""
+        {"summary":"Local model sees a clean finish.","confidence":0.72,"latest_outcome":"Local model compressed the run state.","blockers":[],"next_likely_action":"Review the generated file."}
+        """#))
+        let provider = LocalOpenAICompatibleCognitionProvider(
+            configuration: LocalOpenAICompatibleCognitionConfiguration.lmStudioDefault,
+            httpClient: http
+        )
+
+        let results = await provider.results(for: snapshot, jobs: [job], baseResults: [.stateCompression: base])
+
+        let result = try #require(results.first)
+        #expect(result.provenance.providerID == LocalOpenAICompatibleCognitionConfiguration.providerID)
+        #expect(result.provenance.method == LocalOpenAICompatibleCognitionConfiguration.method)
+        #expect(result.provenance.model == LocalOpenAICompatibleCognitionConfiguration.defaultModel)
+        #expect(result.confidence == 0.72)
+        #expect(result.compressedState?.mode == TaskStatus.completed.rawValue)
+        #expect(result.compressedState?.latestOutcome == "Local model compressed the run state.")
+        #expect(result.compressedState?.nextLikelyAction == "Review the generated file.")
+
+        let requests = await http.recordedRequests()
+        let request = try #require(requests.first)
+        #expect(request.url?.absoluteString == "http://localhost:1234/v1/chat/completions")
+        let body = try requestBodyDictionary(request)
+        #expect(body["model"] as? String == LocalOpenAICompatibleCognitionConfiguration.defaultModel)
+        #expect(body["stream"] as? Bool == false)
+        #expect(body["temperature"] as? Int == 0)
+        let responseFormat = try #require(body["response_format"] as? [String: Any])
+        #expect(responseFormat["type"] as? String == "json_schema")
+    }
+
+    @Test("local OpenAI provider falls back to deterministic result on invalid JSON")
+    func localOpenAIProviderFallsBackOnInvalidJSON() async throws {
+        let taskID = UUID()
+        let runID = UUID()
+        let job = CognitionJob(
+            kind: .stateCompression,
+            taskID: taskID,
+            runID: runID,
+            sourceScope: .task,
+            requestedAt: Date(timeIntervalSince1970: 100)
+        )
+        let base = baseStateCompressionResult(taskID: taskID, runID: runID)
+        let http = StubLocalCognitionHTTPClient(response: chatCompletionResponse(content: "not json"))
+        let provider = LocalOpenAICompatibleCognitionProvider(
+            configuration: LocalOpenAICompatibleCognitionConfiguration.lmStudioDefault,
+            httpClient: http
+        )
+
+        let results = await provider.results(
+            for: localSnapshot(taskID: taskID, runID: runID),
+            jobs: [job],
+            baseResults: [.stateCompression: base]
+        )
+
+        #expect(results == [base])
+    }
+
+    @Test("local cognition configuration supports LM Studio defaults and environment overrides")
+    func localCognitionConfigurationSupportsDefaultsAndEnvironment() throws {
+        let suiteName = "astra.local-cognition.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        defaults.set(true, forKey: AppStorageKeys.localCognitionEnabled)
+        let defaultConfig = try #require(LocalOpenAICompatibleCognitionConfiguration.active(defaults: defaults, environment: [:]))
+        #expect(defaultConfig.baseURL.absoluteString == LocalOpenAICompatibleCognitionConfiguration.lmStudioDefaultBaseURL)
+        #expect(defaultConfig.model == LocalOpenAICompatibleCognitionConfiguration.defaultModel)
+
+        let envConfig = try #require(LocalOpenAICompatibleCognitionConfiguration.active(defaults: defaults, environment: [
+            "ASTRA_COGNITION_PROVIDER": "lmstudio",
+            "ASTRA_COGNITION_BASE_URL": "http://127.0.0.1:3456/v1",
+            "ASTRA_COGNITION_MODEL": "gemma-local",
+            "ASTRA_COGNITION_TIMEOUT_SECONDS": "7",
+            "ASTRA_COGNITION_MAX_TOKENS": "256"
+        ]))
+        #expect(envConfig.chatCompletionsURL.absoluteString == "http://127.0.0.1:3456/v1/chat/completions")
+        #expect(envConfig.model == "gemma-local")
+        #expect(envConfig.timeoutSeconds == 7)
+        #expect(envConfig.maxTokens == 256)
+    }
+
     @Test("compaction preserves cognition events")
     func compactionPreservesCognitionEvents() throws {
         let container = try makeOperationalCognitionContainer()
@@ -268,6 +362,90 @@ struct OperationalCognitionServiceTests {
         let event = try #require(task.events.first { $0.type == type })
         return try #require(CognitionJobResult.decodePayload(event.payload))
     }
+
+    private func baseStateCompressionResult(taskID: UUID, runID: UUID) -> CognitionJobResult {
+        CognitionJobResult(
+            kind: .stateCompression,
+            generatedAt: Date(timeIntervalSince1970: 100),
+            confidence: 0.9,
+            summary: "Run completed.",
+            provenance: CognitionProvenance(
+                taskID: taskID,
+                runID: runID,
+                sourceEventIDs: [],
+                sourceEventTypes: ["agent.response"],
+                sourceEventCount: 1,
+                sourceStartedAt: Date(timeIntervalSince1970: 90),
+                sourceCompletedAt: Date(timeIntervalSince1970: 99),
+                runtimeID: "claude_code",
+                model: "claude",
+                method: OperationalCognitionService.method,
+                providerID: DeterministicCognitionProvider.id
+            ),
+            compressedState: CognitionCompressedState(
+                mode: TaskStatus.completed.rawValue,
+                currentObjective: "Summarize the result",
+                latestOutcome: "Run completed.",
+                blockers: ["old blocker"],
+                filesChanged: ["/tmp/report.md"],
+                nextLikelyAction: "Review the result."
+            )
+        )
+    }
+
+    private func localSnapshot(taskID: UUID, runID: UUID) -> LocalCognitionSnapshot {
+        LocalCognitionSnapshot(
+            taskID: taskID,
+            runID: runID,
+            taskTitle: "Summarize",
+            taskGoal: "Summarize the result",
+            taskStatus: TaskStatus.completed.rawValue,
+            runStatus: RunStatus.completed.rawValue,
+            stopReason: "completed",
+            exitCode: 0,
+            outputExcerpt: "Wrote the report.",
+            filesChanged: ["/tmp/report.md"],
+            tokenCount: 123,
+            costUSD: 0,
+            runtimeID: "claude_code",
+            model: "claude",
+            generatedAt: Date(timeIntervalSince1970: 100),
+            runEvents: [
+                LocalCognitionEventSnapshot(
+                    id: UUID(),
+                    type: "agent.response",
+                    timestamp: Date(timeIntervalSince1970: 95),
+                    payloadExcerpt: "Wrote the report."
+                )
+            ],
+            taskEvents: [
+                LocalCognitionEventSnapshot(
+                    id: UUID(),
+                    type: "agent.response",
+                    timestamp: Date(timeIntervalSince1970: 95),
+                    payloadExcerpt: "Wrote the report."
+                )
+            ]
+        )
+    }
+
+    private func chatCompletionResponse(content: String) -> Data {
+        let payload: [String: Any] = [
+            "choices": [
+                [
+                    "message": [
+                        "content": content
+                    ]
+                ]
+            ]
+        ]
+        return try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+    }
+
+    private func requestBodyDictionary(_ request: URLRequest) throws -> [String: Any] {
+        let data = try #require(request.httpBody)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
 }
 
 private enum TestCognitionProviderError: Error {
@@ -298,5 +476,31 @@ private struct NonAdvisoryCognitionProvider: OperationalCognitionProvider {
             summary: "Non-advisory result should be rejected.",
             provenance: context.provenance(for: job, provider: self)
         )
+    }
+}
+
+private actor StubLocalCognitionHTTPClient: LocalCognitionHTTPClient {
+    private var requests: [URLRequest] = []
+    private let response: Data
+    private let statusCode: Int
+
+    init(response: Data, statusCode: Int = 200) {
+        self.response = response
+        self.statusCode = statusCode
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        requests.append(request)
+        let response = HTTPURLResponse(
+            url: request.url ?? URL(string: "http://localhost")!,
+            statusCode: statusCode,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        return (self.response, response)
+    }
+
+    func recordedRequests() -> [URLRequest] {
+        requests
     }
 }

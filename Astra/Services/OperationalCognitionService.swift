@@ -98,6 +98,17 @@ struct OperationalCognitionRuntime {
         }
     }
 
+    func recordResults(
+        _ results: [CognitionJobResult],
+        task: AgentTask,
+        run: TaskRun,
+        modelContext: ModelContext
+    ) {
+        for result in results {
+            insertResultIfNeeded(result, task: task, run: run, modelContext: modelContext)
+        }
+    }
+
     private func execute(
         job: CognitionJob,
         context: OperationalCognitionJobContext,
@@ -576,6 +587,27 @@ enum OperationalCognitionService {
         generatedAt: Date = Date(),
         runtime: OperationalCognitionRuntime? = nil
     ) {
+        if let runtime {
+            runtime.recordPostRunAdvisories(
+                task: task,
+                run: run,
+                modelContext: modelContext,
+                generatedAt: generatedAt
+            )
+            return
+        }
+
+        if let configuration = LocalOpenAICompatibleCognitionConfiguration.active() {
+            LocalOpenAICompatibleCognitionExecutor.schedulePostRunAdvisories(
+                task: task,
+                run: run,
+                modelContext: modelContext,
+                generatedAt: generatedAt,
+                configuration: configuration
+            )
+            return
+        }
+
         let activeRuntime = runtime ?? .default
         activeRuntime.recordPostRunAdvisories(
             task: task,

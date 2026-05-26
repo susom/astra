@@ -35,6 +35,11 @@ enum AppStorageKeys {
     static let claudeModelsCheckedAt = "astra.claude.modelsCheckedAt.v1"
     static let copilotAvailableModels = "astra.copilot.availableModels.v1"
     static let copilotModelsCheckedAt = "astra.copilot.modelsCheckedAt.v1"
+    static let localCognitionEnabled = "astra.cognition.local.enabled.v1"
+    static let localCognitionBaseURL = "astra.cognition.local.baseURL.v1"
+    static let localCognitionModel = "astra.cognition.local.model.v1"
+    static let localCognitionTimeoutSeconds = "astra.cognition.local.timeoutSeconds.v1"
+    static let localCognitionMaxTokens = "astra.cognition.local.maxTokens.v1"
 }
 
 enum LoggingPreferences {
