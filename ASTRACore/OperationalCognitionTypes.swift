@@ -6,13 +6,15 @@ public enum OperationalCognitionEventTypes {
     public static let attentionSignal = "cognition.attention.signal"
     public static let stateCompressed = "cognition.state.compressed"
     public static let localDiagnostics = "cognition.local.diagnostics"
+    public static let localEvaluation = "cognition.local.evaluation"
 
     public static let all: Set<String> = [
         runSummary,
         taskHealth,
         attentionSignal,
         stateCompressed,
-        localDiagnostics
+        localDiagnostics,
+        localEvaluation
     ]
 
     public static func isCognitionEvent(_ type: String) -> Bool {
@@ -399,5 +401,70 @@ public struct LocalCognitionRunDiagnostics: Codable, Hashable, Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(LocalCognitionRunDiagnostics.self, from: data)
+    }
+}
+
+public enum LocalCognitionEvaluationRating: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
+    case useful
+    case sameAsDeterministic = "same_as_deterministic"
+    case worseNoisy = "worse_noisy"
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .useful:
+            "Useful"
+        case .sameAsDeterministic:
+            "Same"
+        case .worseNoisy:
+            "Worse"
+        }
+    }
+}
+
+public struct LocalCognitionRunEvaluation: Codable, Hashable, Sendable {
+    public let schemaVersion: Int
+    public let diagnosticsEventID: UUID
+    public let taskID: UUID?
+    public let runID: UUID?
+    public let rating: LocalCognitionEvaluationRating
+    public let note: String?
+    public let evaluatedAt: Date
+    public let evaluator: String
+
+    public init(
+        schemaVersion: Int = 1,
+        diagnosticsEventID: UUID,
+        taskID: UUID?,
+        runID: UUID?,
+        rating: LocalCognitionEvaluationRating,
+        note: String? = nil,
+        evaluatedAt: Date,
+        evaluator: String = "user"
+    ) {
+        self.schemaVersion = schemaVersion
+        self.diagnosticsEventID = diagnosticsEventID
+        self.taskID = taskID
+        self.runID = runID
+        self.rating = rating
+        self.note = note
+        self.evaluatedAt = evaluatedAt
+        self.evaluator = evaluator
+    }
+
+    public func encodedPayload() -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(self) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    public static func decodePayload(_ payload: String) -> LocalCognitionRunEvaluation? {
+        guard let data = payload.data(using: .utf8) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(LocalCognitionRunEvaluation.self, from: data)
     }
 }

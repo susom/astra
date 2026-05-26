@@ -326,6 +326,112 @@ struct OperationalCognitionServiceTests {
         #expect(envConfig.maxTokens == 256)
     }
 
+    @Test("local cognition evaluation builder uses latest rating and material changes")
+    func localCognitionEvaluationBuilderUsesLatestRatingAndMaterialChanges() throws {
+        let container = try makeOperationalCognitionContainer()
+        let context = container.mainContext
+        let task = AgentTask(title: "Evaluate cognition", goal: "Compare local cognition")
+        task.status = .completed
+        let run = TaskRun(task: task)
+        run.status = .completed
+        run.completedAt = Date(timeIntervalSince1970: 99)
+        context.insert(task)
+        context.insert(run)
+
+        let diagnostics = localDiagnostics(taskID: task.id, runID: run.id)
+        let diagnosticsEvent = TaskEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: try #require(diagnostics.encodedPayload()),
+            run: run
+        )
+        diagnosticsEvent.timestamp = Date(timeIntervalSince1970: 100)
+        context.insert(diagnosticsEvent)
+
+        let olderEvaluation = LocalCognitionRunEvaluation(
+            diagnosticsEventID: diagnosticsEvent.id,
+            taskID: task.id,
+            runID: run.id,
+            rating: .useful,
+            evaluatedAt: Date(timeIntervalSince1970: 101)
+        )
+        let newerEvaluation = LocalCognitionRunEvaluation(
+            diagnosticsEventID: diagnosticsEvent.id,
+            taskID: task.id,
+            runID: run.id,
+            rating: .sameAsDeterministic,
+            evaluatedAt: Date(timeIntervalSince1970: 102)
+        )
+        let olderEvent = TaskEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localEvaluation,
+            payload: try #require(olderEvaluation.encodedPayload()),
+            run: run
+        )
+        let newerEvent = TaskEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localEvaluation,
+            payload: try #require(newerEvaluation.encodedPayload()),
+            run: run
+        )
+        context.insert(olderEvent)
+        context.insert(newerEvent)
+
+        let rows = LocalCognitionEvaluationBuilder.rows(from: task.events)
+        let row = try #require(rows.first)
+
+        #expect(row.rating == .sameAsDeterministic)
+        #expect(row.diagnostics.successfulJobCount == 1)
+        #expect(row.diagnostics.fallbackJobCount == 1)
+        #expect(row.materialChangedFields == ["task_health.summary"])
+        #expect(row.isMateriallyDifferent)
+        #expect(row.comparisons.count == 2)
+
+        let summary = LocalCognitionEvaluationSummary(rows: rows)
+        #expect(summary.totalRuns == 1)
+        #expect(summary.ratedRuns == 1)
+        #expect(summary.sameCount == 1)
+        #expect(summary.fallbackRuns == 1)
+    }
+
+    @Test("local cognition evaluation store records audit event without mutating task")
+    func localCognitionEvaluationStoreRecordsEventWithoutMutatingTask() throws {
+        let container = try makeOperationalCognitionContainer()
+        let context = container.mainContext
+        let task = AgentTask(title: "Rate cognition", goal: "Rate local output")
+        task.status = .completed
+        let run = TaskRun(task: task)
+        run.status = .completed
+        context.insert(task)
+        context.insert(run)
+
+        let diagnostics = localDiagnostics(taskID: task.id, runID: run.id)
+        let diagnosticsEvent = TaskEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: try #require(diagnostics.encodedPayload()),
+            run: run
+        )
+        context.insert(diagnosticsEvent)
+
+        LocalCognitionEvaluationStore.record(
+            rating: .worseNoisy,
+            diagnosticsEvent: diagnosticsEvent,
+            modelContext: context,
+            evaluatedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        #expect(task.status == .completed)
+        let evaluationEvent = try #require(task.events.first {
+            $0.type == OperationalCognitionEventTypes.localEvaluation
+        })
+        let evaluation = try #require(LocalCognitionRunEvaluation.decodePayload(evaluationEvent.payload))
+        #expect(evaluation.diagnosticsEventID == diagnosticsEvent.id)
+        #expect(evaluation.taskID == task.id)
+        #expect(evaluation.runID == run.id)
+        #expect(evaluation.rating == .worseNoisy)
+    }
+
     @Test("compaction preserves cognition events")
     func compactionPreservesCognitionEvents() throws {
         let container = try makeOperationalCognitionContainer()
@@ -465,6 +571,39 @@ struct OperationalCognitionServiceTests {
     private func requestBodyDictionary(_ request: URLRequest) throws -> [String: Any] {
         let data = try #require(request.httpBody)
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private func localDiagnostics(taskID _: UUID, runID _: UUID) -> LocalCognitionRunDiagnostics {
+        LocalCognitionRunDiagnostics(
+            providerID: LocalOpenAICompatibleCognitionConfiguration.providerID,
+            method: LocalOpenAICompatibleCognitionConfiguration.method,
+            model: LocalOpenAICompatibleCognitionConfiguration.defaultModel,
+            endpoint: "http://localhost:1234/v1/chat/completions",
+            generatedAt: Date(timeIntervalSince1970: 100),
+            totalLatencyMilliseconds: 1_200,
+            jobs: [
+                LocalCognitionJobDiagnostics(
+                    kind: .taskHealth,
+                    status: .success,
+                    latencyMilliseconds: 700,
+                    fallbackReason: nil,
+                    deterministicSummary: "Task completed with 1 changed file.",
+                    localSummary: "Task completed with a useful implementation note.",
+                    changedFields: ["summary", "confidence", "provenance", "task_health.summary"],
+                    rawModelOutput: #"{"summary":"Task completed with a useful implementation note."}"#
+                ),
+                LocalCognitionJobDiagnostics(
+                    kind: .stateCompression,
+                    status: .fallback,
+                    latencyMilliseconds: 500,
+                    fallbackReason: "invalid_model_json",
+                    deterministicSummary: "Run completed.",
+                    localSummary: nil,
+                    changedFields: [],
+                    rawModelOutput: nil
+                )
+            ]
+        )
     }
 }
 

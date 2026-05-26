@@ -57,6 +57,13 @@ struct SettingsView: View {
                     Label("Runtime", systemImage: "cpu")
                 }
 
+            if AppChannel.current == .development {
+                LocalCognitionEvaluationView()
+                    .tabItem {
+                        Label("Cognition", systemImage: "waveform.path.ecg")
+                    }
+            }
+
             permissionsSettingsTab
                 .tabItem {
                     Label("Permissions", systemImage: "checkmark.shield")
