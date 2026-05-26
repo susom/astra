@@ -1897,6 +1897,19 @@ struct TaskMainView: View {
                 }
             }
 
+            if !presentation.cognitionDiagnostics.isEmpty {
+                runActivityDetailSection(
+                    title: "Cognition diagnostics",
+                    systemImage: "waveform.path.ecg"
+                ) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(presentation.cognitionDiagnostics) { diagnostics in
+                            localCognitionDiagnosticsView(diagnostics)
+                        }
+                    }
+                }
+            }
+
             if !presentation.tools.isEmpty {
                 runActivityDetailSection(title: "Tool activity", systemImage: "wrench.and.screwdriver") {
                     toolActivityList(presentation.tools)
@@ -2009,6 +2022,9 @@ struct TaskMainView: View {
         }
         if !presentation.advisories.isEmpty {
             parts.append("\(presentation.advisories.count) advisory \(presentation.advisories.count == 1 ? "signal" : "signals")")
+        }
+        if !presentation.cognitionDiagnostics.isEmpty {
+            parts.append("local cognition trace")
         }
         if presentation.policy != nil && !parts.contains(where: { $0.contains("policy") }) {
             parts.append("policy")
@@ -2243,6 +2259,74 @@ struct TaskMainView: View {
             if let rawPayload = advisory.rawPayload, !rawPayload.isEmpty {
                 rawOutputDisclosure(rawPayload, label: "Show advisory payload")
                     .padding(.leading, 22)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func localCognitionDiagnosticsView(_ diagnostics: LocalCognitionDiagnosticsPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: issueIcon(diagnostics.severity))
+                    .font(Stanford.ui(12))
+                    .foregroundStyle(issueColor(diagnostics.severity))
+                    .frame(width: 14)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(diagnostics.title)
+                        .font(Stanford.chatSection())
+                        .foregroundStyle(issueColor(diagnostics.severity))
+                    Text(diagnostics.summary)
+                        .font(Stanford.chatSection())
+                        .foregroundStyle(Stanford.readingText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            if !diagnostics.facts.isEmpty {
+                factList(diagnostics.facts)
+                    .padding(.leading, 22)
+            }
+            VStack(alignment: .leading, spacing: 7) {
+                ForEach(diagnostics.jobs) { job in
+                    localCognitionJobDiagnosticsView(job)
+                }
+            }
+            .padding(.leading, 22)
+            if let rawPayload = diagnostics.rawPayload, !rawPayload.isEmpty {
+                rawOutputDisclosure(rawPayload, label: "Show diagnostics payload")
+                    .padding(.leading, 22)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func localCognitionJobDiagnosticsView(_ job: LocalCognitionJobDiagnosticsPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: issueIcon(job.severity))
+                    .font(Stanford.ui(11))
+                    .foregroundStyle(issueColor(job.severity))
+                    .frame(width: 13)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(job.title)
+                        .font(Stanford.chatMeta())
+                        .foregroundStyle(Stanford.black)
+                    Text(job.summary)
+                        .font(Stanford.chatMeta())
+                        .foregroundStyle(Stanford.coolGrey)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                Spacer(minLength: 0)
+            }
+            if !job.facts.isEmpty {
+                factList(job.facts)
+                    .padding(.leading, 20)
+            }
+            if let rawModelOutput = job.rawModelOutput, !rawModelOutput.isEmpty {
+                rawOutputDisclosure(rawModelOutput, label: "Show model JSON")
+                    .padding(.leading, 20)
             }
         }
         .padding(.vertical, 1)

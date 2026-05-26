@@ -1443,6 +1443,85 @@ struct TaskThreadSnapshotTests {
         })
     }
 
+    @Test("Local cognition diagnostics are visible in run activity")
+    func localCognitionDiagnosticsAreVisibleInRunActivity() throws {
+        let task = makeTask(status: .completed)
+        let run = TaskRun(task: task)
+        run.status = .completed
+        run.completedAt = Date(timeIntervalSince1970: 2)
+        let diagnostics = LocalCognitionRunDiagnostics(
+            providerID: "local.openai-compatible.lmstudio",
+            method: "local-openai-compatible-json-v1",
+            model: "astra-cognition",
+            endpoint: "http://localhost:1234/v1/chat/completions",
+            generatedAt: Date(timeIntervalSince1970: 2),
+            totalLatencyMilliseconds: 1_234,
+            jobs: [
+                LocalCognitionJobDiagnostics(
+                    kind: .runSummary,
+                    status: .success,
+                    latencyMilliseconds: 500,
+                    fallbackReason: nil,
+                    deterministicSummary: "Run completed.",
+                    localSummary: "Local model summarized the run.",
+                    changedFields: ["summary", "provenance"],
+                    rawModelOutput: #"{"summary":"Local model summarized the run."}"#
+                ),
+                LocalCognitionJobDiagnostics(
+                    kind: .taskHealth,
+                    status: .fallback,
+                    latencyMilliseconds: 734,
+                    fallbackReason: "invalid_model_json",
+                    deterministicSummary: "Task completed.",
+                    localSummary: nil,
+                    changedFields: [],
+                    rawModelOutput: nil
+                )
+            ]
+        )
+        let event = makeEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: try #require(diagnostics.encodedPayload()),
+            timestamp: Date(timeIntervalSince1970: 3),
+            run: run
+        )
+
+        let snapshot = TaskThreadSnapshot(
+            goal: task.goal,
+            createdAt: task.createdAt,
+            events: [event],
+            runs: [run]
+        )
+        let visibleRun = try #require(snapshot.latestRun)
+        let activity = snapshot.activity(for: visibleRun)
+        let presentation = RunActivityPresentation(
+            run: visibleRun,
+            activity: activity,
+            notices: activity.notices
+        )
+
+        #expect(activity.notices.count == 1)
+        #expect(activity.notices.first?.type == OperationalCognitionEventTypes.localDiagnostics)
+        #expect(presentation.advisories.isEmpty)
+        #expect(presentation.issues.isEmpty)
+        #expect(presentation.cognitionDiagnostics.count == 1)
+        let row = try #require(presentation.cognitionDiagnostics.first)
+        #expect(row.summary.contains("1 local"))
+        #expect(row.summary.contains("1 fallback"))
+        #expect(row.summary.contains("1.23s"))
+        #expect(row.severity == .warning)
+        #expect(row.facts.contains(.init(title: "Model", value: "astra-cognition")))
+        #expect(row.jobs.count == 2)
+        #expect(row.jobs.first?.rawModelOutput?.contains("Local model summarized") == true)
+        #expect(snapshot.conversationItems.contains {
+            if case .agentResponse(let visibleRun) = $0 {
+                return visibleRun.id == run.id
+            }
+            return false
+        })
+    }
+
     @Test("Budget warning is promoted to an inline run notice")
     func budgetWarningPromotesToInlineRunNotice() {
         let task = makeTask()

@@ -596,7 +596,8 @@ struct TaskThreadSnapshot: Sendable {
                      OperationalCognitionEventTypes.runSummary,
                      OperationalCognitionEventTypes.taskHealth,
                      OperationalCognitionEventTypes.attentionSignal,
-                     OperationalCognitionEventTypes.stateCompressed:
+                     OperationalCognitionEventTypes.stateCompressed,
+                     OperationalCognitionEventTypes.localDiagnostics:
                     noticesByRunID[runID, default: []].append(TaskRunNotice(
                         id: event.id,
                         type: event.type,

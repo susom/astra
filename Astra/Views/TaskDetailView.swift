@@ -308,6 +308,7 @@ struct TimelineTabView: View {
         case OperationalCognitionEventTypes.taskHealth: return "Advisory Task Health"
         case OperationalCognitionEventTypes.attentionSignal: return "Advisory Attention Signal"
         case OperationalCognitionEventTypes.stateCompressed: return "Advisory State"
+        case OperationalCognitionEventTypes.localDiagnostics: return "Local Cognition Diagnostics"
         case "error": return "Error"
         case "user.message": return "You"
         default: return type

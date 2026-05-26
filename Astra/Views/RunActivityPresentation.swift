@@ -280,6 +280,141 @@ struct CognitionAdvisoryPresentation: Identifiable, Hashable, Sendable {
     }
 }
 
+struct LocalCognitionJobDiagnosticsPresentation: Identifiable, Hashable, Sendable {
+    let id: String
+    let title: String
+    let summary: String
+    let severity: RunActivitySeverity
+    let facts: [RunFactPresentation]
+    let rawModelOutput: String?
+
+    init(job: LocalCognitionJobDiagnostics) {
+        id = job.kind.rawValue
+        title = "\(Self.kindTitle(job.kind)) \(Self.statusLabel(job.status))"
+        severity = Self.severity(for: job.status)
+        summary = Self.summary(for: job)
+        var rowFacts: [RunFactPresentation] = [
+            .init(title: "Kind", value: job.kind.rawValue),
+            .init(title: "Status", value: job.status.rawValue)
+        ]
+        if let latency = job.latencyMilliseconds {
+            rowFacts.append(.init(title: "Latency", value: Self.latencyLabel(latency)))
+        }
+        if !job.changedFields.isEmpty {
+            rowFacts.append(.init(title: "Changed", value: compactList(job.changedFields, limit: 6)))
+        }
+        if let reason = job.fallbackReason, !reason.isEmpty {
+            rowFacts.append(.init(title: "Reason", value: reason))
+        }
+        if let deterministic = job.deterministicSummary, !deterministic.isEmpty {
+            rowFacts.append(.init(title: "Deterministic", value: deterministic))
+        }
+        if let local = job.localSummary, !local.isEmpty {
+            rowFacts.append(.init(title: "Local", value: local))
+        }
+        facts = rowFacts
+        rawModelOutput = job.rawModelOutput.flatMap {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : PayloadFormatter.prettyRawPayload($0)
+        }
+    }
+
+    private static func kindTitle(_ kind: OperationalCognitionJobKind) -> String {
+        switch kind {
+        case .runSummary:
+            "Run summary"
+        case .taskHealth:
+            "Task health"
+        case .attentionSignal:
+            "Attention"
+        case .stateCompression:
+            "State"
+        }
+    }
+
+    private static func statusLabel(_ status: LocalCognitionJobDiagnosticStatus) -> String {
+        switch status {
+        case .success:
+            "local"
+        case .fallback:
+            "fallback"
+        case .skipped:
+            "skipped"
+        }
+    }
+
+    private static func summary(for job: LocalCognitionJobDiagnostics) -> String {
+        switch job.status {
+        case .success:
+            if let local = job.localSummary, !local.isEmpty {
+                return local
+            }
+            return "Local model returned advisory output."
+        case .fallback:
+            let reason = job.fallbackReason ?? "unknown"
+            return "ASTRA used the deterministic advisory because local cognition failed: \(reason)."
+        case .skipped:
+            return "ASTRA skipped this local job because no deterministic advisory baseline was available."
+        }
+    }
+
+    private static func severity(for status: LocalCognitionJobDiagnosticStatus) -> RunActivitySeverity {
+        status == .fallback ? .warning : .info
+    }
+
+    private static func latencyLabel(_ milliseconds: Int) -> String {
+        if milliseconds < 1_000 {
+            return "\(milliseconds)ms"
+        }
+        return String(format: "%.2fs", Double(milliseconds) / 1_000)
+    }
+}
+
+struct LocalCognitionDiagnosticsPresentation: Identifiable, Hashable, Sendable {
+    let id: UUID
+    let title: String
+    let summary: String
+    let severity: RunActivitySeverity
+    let facts: [RunFactPresentation]
+    let jobs: [LocalCognitionJobDiagnosticsPresentation]
+    let rawPayload: String?
+
+    init?(notice: TaskRunNotice) {
+        guard let diagnostics = LocalCognitionRunDiagnostics.decodePayload(notice.payload) else {
+            return nil
+        }
+
+        id = notice.id
+        title = "Local cognition diagnostics"
+        summary = [
+            "\(diagnostics.successfulJobCount) local",
+            "\(diagnostics.fallbackJobCount) fallback",
+            "\(diagnostics.skippedJobCount) skipped",
+            Self.latencyLabel(diagnostics.totalLatencyMilliseconds)
+        ].joined(separator: " · ")
+        severity = diagnostics.fallbackJobCount > 0 ? .warning : .info
+        facts = [
+            .init(title: "Provider", value: diagnostics.providerID),
+            .init(title: "Model", value: diagnostics.model),
+            .init(title: "Endpoint", value: diagnostics.endpoint, isMonospaced: true),
+            .init(title: "Method", value: diagnostics.method),
+            .init(title: "Attempted", value: String(diagnostics.attemptedJobCount)),
+            .init(title: "Succeeded", value: String(diagnostics.successfulJobCount)),
+            .init(title: "Fallback", value: String(diagnostics.fallbackJobCount)),
+            .init(title: "Skipped", value: String(diagnostics.skippedJobCount)),
+            .init(title: "Total latency", value: Self.latencyLabel(diagnostics.totalLatencyMilliseconds))
+        ]
+        jobs = diagnostics.jobs.map(LocalCognitionJobDiagnosticsPresentation.init)
+        rawPayload = PayloadFormatter.prettyRawPayload(notice.payload)
+    }
+
+    private static func latencyLabel(_ milliseconds: Int) -> String {
+        if milliseconds < 1_000 {
+            return "\(milliseconds)ms"
+        }
+        return String(format: "%.2fs", Double(milliseconds) / 1_000)
+    }
+}
+
 struct PolicySummaryPresentation: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
@@ -402,6 +537,7 @@ struct RunActivityPresentation: Hashable, Sendable {
     let issues: [RunIssuePresentation]
     let approvals: [RuntimePermissionApprovalNoticePresentation]
     let advisories: [CognitionAdvisoryPresentation]
+    let cognitionDiagnostics: [LocalCognitionDiagnosticsPresentation]
     let progressMessages: [TaskRunProgressMessage]
     let tools: [ToolActivityPresentation]
     let files: [StoredFileChange]
@@ -419,10 +555,18 @@ struct RunActivityPresentation: Hashable, Sendable {
         var issueRows: [RunIssuePresentation] = []
         var approvalRows: [RuntimePermissionApprovalNoticePresentation] = []
         var advisoryRows: [CognitionAdvisoryPresentation] = []
+        var cognitionDiagnosticRows: [LocalCognitionDiagnosticsPresentation] = []
         var technicalRows: [TechnicalOutputPresentation] = []
         let permissionSummaryPayload = notices.last(where: { $0.type == "astra.permission_summary" })?.payload
 
         for notice in notices where notice.type != "astra.permission_summary" {
+            if notice.type == OperationalCognitionEventTypes.localDiagnostics {
+                if let diagnostics = LocalCognitionDiagnosticsPresentation(notice: notice) {
+                    cognitionDiagnosticRows.append(diagnostics)
+                }
+                continue
+            }
+
             if OperationalCognitionEventTypes.isCognitionEvent(notice.type) {
                 if let advisory = CognitionAdvisoryPresentation(notice: notice) {
                     advisoryRows.append(advisory)
@@ -457,6 +601,7 @@ struct RunActivityPresentation: Hashable, Sendable {
         issues = issueRows
         approvals = approvalRows
         advisories = advisoryRows
+        cognitionDiagnostics = cognitionDiagnosticRows
         self.progressMessages = progressMessages
         tools = Self.groupToolCalls(activity.toolCalls)
         files = activity.fileChanges
@@ -469,7 +614,7 @@ struct RunActivityPresentation: Hashable, Sendable {
     }
 
     var hasVisibleDetails: Bool {
-        !issues.isEmpty || !approvals.isEmpty || !advisories.isEmpty || !progressMessages.isEmpty || !tools.isEmpty || !files.isEmpty || policy != nil || !technicalOutputs.isEmpty || !stats.isEmpty
+        !issues.isEmpty || !approvals.isEmpty || !advisories.isEmpty || !cognitionDiagnostics.isEmpty || !progressMessages.isEmpty || !tools.isEmpty || !files.isEmpty || policy != nil || !technicalOutputs.isEmpty || !stats.isEmpty
     }
 
     private static func groupToolCalls(_ calls: [TaskToolCall]) -> [ToolActivityPresentation] {

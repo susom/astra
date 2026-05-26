@@ -5,12 +5,14 @@ public enum OperationalCognitionEventTypes {
     public static let taskHealth = "cognition.task.health"
     public static let attentionSignal = "cognition.attention.signal"
     public static let stateCompressed = "cognition.state.compressed"
+    public static let localDiagnostics = "cognition.local.diagnostics"
 
     public static let all: Set<String> = [
         runSummary,
         taskHealth,
         attentionSignal,
-        stateCompressed
+        stateCompressed,
+        localDiagnostics
     ]
 
     public static func isCognitionEvent(_ type: String) -> Bool {
@@ -306,5 +308,96 @@ public struct CognitionJobResult: Codable, Hashable, Sendable {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(CognitionJobResult.self, from: data)
+    }
+}
+
+public enum LocalCognitionJobDiagnosticStatus: String, Codable, Hashable, Sendable {
+    case success
+    case fallback
+    case skipped
+}
+
+public struct LocalCognitionJobDiagnostics: Codable, Hashable, Sendable {
+    public let kind: OperationalCognitionJobKind
+    public let status: LocalCognitionJobDiagnosticStatus
+    public let latencyMilliseconds: Int?
+    public let fallbackReason: String?
+    public let deterministicSummary: String?
+    public let localSummary: String?
+    public let changedFields: [String]
+    public let rawModelOutput: String?
+
+    public init(
+        kind: OperationalCognitionJobKind,
+        status: LocalCognitionJobDiagnosticStatus,
+        latencyMilliseconds: Int?,
+        fallbackReason: String?,
+        deterministicSummary: String?,
+        localSummary: String?,
+        changedFields: [String],
+        rawModelOutput: String?
+    ) {
+        self.kind = kind
+        self.status = status
+        self.latencyMilliseconds = latencyMilliseconds
+        self.fallbackReason = fallbackReason
+        self.deterministicSummary = deterministicSummary
+        self.localSummary = localSummary
+        self.changedFields = changedFields
+        self.rawModelOutput = rawModelOutput
+    }
+}
+
+public struct LocalCognitionRunDiagnostics: Codable, Hashable, Sendable {
+    public let schemaVersion: Int
+    public let providerID: String
+    public let method: String
+    public let model: String
+    public let endpoint: String
+    public let generatedAt: Date
+    public let totalLatencyMilliseconds: Int
+    public let attemptedJobCount: Int
+    public let successfulJobCount: Int
+    public let fallbackJobCount: Int
+    public let skippedJobCount: Int
+    public let jobs: [LocalCognitionJobDiagnostics]
+
+    public init(
+        schemaVersion: Int = 1,
+        providerID: String,
+        method: String,
+        model: String,
+        endpoint: String,
+        generatedAt: Date,
+        totalLatencyMilliseconds: Int,
+        jobs: [LocalCognitionJobDiagnostics]
+    ) {
+        self.schemaVersion = schemaVersion
+        self.providerID = providerID
+        self.method = method
+        self.model = model
+        self.endpoint = endpoint
+        self.generatedAt = generatedAt
+        self.totalLatencyMilliseconds = totalLatencyMilliseconds
+        self.jobs = jobs
+        attemptedJobCount = jobs.filter { $0.status != .skipped }.count
+        successfulJobCount = jobs.filter { $0.status == .success }.count
+        fallbackJobCount = jobs.filter { $0.status == .fallback }.count
+        skippedJobCount = jobs.filter { $0.status == .skipped }.count
+    }
+
+    public func encodedPayload() -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(self) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    public static func decodePayload(_ payload: String) -> LocalCognitionRunDiagnostics? {
+        guard let data = payload.data(using: .utf8) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(LocalCognitionRunDiagnostics.self, from: data)
     }
 }

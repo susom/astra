@@ -233,7 +233,8 @@ struct OperationalCognitionServiceTests {
             httpClient: http
         )
 
-        let results = await provider.results(for: snapshot, jobs: [job], baseResults: [.stateCompression: base])
+        let runResult = await provider.run(for: snapshot, jobs: [job], baseResults: [.stateCompression: base])
+        let results = runResult.results
 
         let result = try #require(results.first)
         #expect(result.provenance.providerID == LocalOpenAICompatibleCognitionConfiguration.providerID)
@@ -243,6 +244,19 @@ struct OperationalCognitionServiceTests {
         #expect(result.compressedState?.mode == TaskStatus.completed.rawValue)
         #expect(result.compressedState?.latestOutcome == "Local model compressed the run state.")
         #expect(result.compressedState?.nextLikelyAction == "Review the generated file.")
+
+        #expect(runResult.diagnostics.providerID == LocalOpenAICompatibleCognitionConfiguration.providerID)
+        #expect(runResult.diagnostics.model == LocalOpenAICompatibleCognitionConfiguration.defaultModel)
+        #expect(runResult.diagnostics.endpoint == "http://localhost:1234/v1/chat/completions")
+        #expect(runResult.diagnostics.attemptedJobCount == 1)
+        #expect(runResult.diagnostics.successfulJobCount == 1)
+        #expect(runResult.diagnostics.fallbackJobCount == 0)
+        let jobDiagnostics = try #require(runResult.diagnostics.jobs.first)
+        #expect(jobDiagnostics.status == .success)
+        #expect(jobDiagnostics.deterministicSummary == "Run completed.")
+        #expect(jobDiagnostics.localSummary == "Local model compressed the run state.")
+        #expect(jobDiagnostics.changedFields.contains("compressed_state.latest_outcome"))
+        #expect(jobDiagnostics.rawModelOutput?.contains("Local model sees") == true)
 
         let requests = await http.recordedRequests()
         let request = try #require(requests.first)
@@ -273,13 +287,19 @@ struct OperationalCognitionServiceTests {
             httpClient: http
         )
 
-        let results = await provider.results(
+        let runResult = await provider.run(
             for: localSnapshot(taskID: taskID, runID: runID),
             jobs: [job],
             baseResults: [.stateCompression: base]
         )
 
-        #expect(results == [base])
+        #expect(runResult.results == [base])
+        #expect(runResult.diagnostics.fallbackJobCount == 1)
+        let jobDiagnostics = try #require(runResult.diagnostics.jobs.first)
+        #expect(jobDiagnostics.status == .fallback)
+        #expect(jobDiagnostics.fallbackReason == "invalid_model_json")
+        #expect(jobDiagnostics.deterministicSummary == "Run completed.")
+        #expect(jobDiagnostics.localSummary == nil)
     }
 
     @Test("local cognition configuration supports LM Studio defaults and environment overrides")

@@ -160,6 +160,16 @@ enum LocalOpenAICompatibleCognitionError: Error, Equatable {
     case invalidModelJSON
 }
 
+struct LocalOpenAICompatibleCognitionRun: Sendable {
+    let results: [CognitionJobResult]
+    let diagnostics: LocalCognitionRunDiagnostics
+}
+
+private struct LocalCognitionModelResponse: Sendable {
+    let output: LocalCognitionModelOutput
+    let rawContent: String
+}
+
 struct LocalOpenAICompatibleCognitionProvider {
     let configuration: LocalOpenAICompatibleCognitionConfiguration
     let httpClient: any LocalCognitionHTTPClient
@@ -177,24 +187,79 @@ struct LocalOpenAICompatibleCognitionProvider {
         jobs: [CognitionJob],
         baseResults: [OperationalCognitionJobKind: CognitionJobResult]
     ) async -> [CognitionJobResult] {
+        await run(for: snapshot, jobs: jobs, baseResults: baseResults).results
+    }
+
+    func run(
+        for snapshot: LocalCognitionSnapshot,
+        jobs: [CognitionJob],
+        baseResults: [OperationalCognitionJobKind: CognitionJobResult]
+    ) async -> LocalOpenAICompatibleCognitionRun {
         var results: [CognitionJobResult] = []
+        var jobDiagnostics: [LocalCognitionJobDiagnostics] = []
         for job in jobs {
-            guard let baseResult = baseResults[job.kind] else { continue }
+            guard let baseResult = baseResults[job.kind] else {
+                jobDiagnostics.append(LocalCognitionJobDiagnostics(
+                    kind: job.kind,
+                    status: .skipped,
+                    latencyMilliseconds: nil,
+                    fallbackReason: "deterministic_baseline_absent",
+                    deterministicSummary: nil,
+                    localSummary: nil,
+                    changedFields: [],
+                    rawModelOutput: nil
+                ))
+                continue
+            }
+
+            let started = Date()
             do {
-                let output = try await output(for: job, snapshot: snapshot, baseResult: baseResult)
-                results.append(mergedResult(baseResult: baseResult, output: output))
+                let response = try await modelResponse(for: job, snapshot: snapshot, baseResult: baseResult)
+                let merged = mergedResult(baseResult: baseResult, output: response.output)
+                results.append(merged)
+                jobDiagnostics.append(LocalCognitionJobDiagnostics(
+                    kind: job.kind,
+                    status: .success,
+                    latencyMilliseconds: milliseconds(from: started, to: Date()),
+                    fallbackReason: nil,
+                    deterministicSummary: baseResult.summary,
+                    localSummary: merged.summary,
+                    changedFields: changedFields(base: baseResult, local: merged),
+                    rawModelOutput: boundedMultiline(response.rawContent, maxCharacters: 4_000)
+                ))
             } catch {
                 results.append(baseResult)
+                jobDiagnostics.append(LocalCognitionJobDiagnostics(
+                    kind: job.kind,
+                    status: .fallback,
+                    latencyMilliseconds: milliseconds(from: started, to: Date()),
+                    fallbackReason: diagnosticReason(for: error),
+                    deterministicSummary: baseResult.summary,
+                    localSummary: nil,
+                    changedFields: [],
+                    rawModelOutput: nil
+                ))
                 AppLogger.audit(.runtimePersistenceSummary, category: "Cognition", taskID: snapshot.taskID, fields: [
                     "result": "local_provider_failed",
                     "kind": job.kind.rawValue,
                     "provider": LocalOpenAICompatibleCognitionConfiguration.providerID,
                     "method": LocalOpenAICompatibleCognitionConfiguration.method,
-                    "error_type": String(describing: type(of: error))
+                    "error_type": String(describing: type(of: error)),
+                    "reason": diagnosticReason(for: error)
                 ], level: .warning)
             }
         }
-        return results
+
+        let diagnostics = LocalCognitionRunDiagnostics(
+            providerID: LocalOpenAICompatibleCognitionConfiguration.providerID,
+            method: LocalOpenAICompatibleCognitionConfiguration.method,
+            model: configuration.model,
+            endpoint: configuration.chatCompletionsURL.absoluteString,
+            generatedAt: snapshot.generatedAt,
+            totalLatencyMilliseconds: jobDiagnostics.compactMap(\.latencyMilliseconds).reduce(0, +),
+            jobs: jobDiagnostics
+        )
+        return LocalOpenAICompatibleCognitionRun(results: results, diagnostics: diagnostics)
     }
 
     func output(
@@ -202,6 +267,14 @@ struct LocalOpenAICompatibleCognitionProvider {
         snapshot: LocalCognitionSnapshot,
         baseResult: CognitionJobResult
     ) async throws -> LocalCognitionModelOutput {
+        try await modelResponse(for: job, snapshot: snapshot, baseResult: baseResult).output
+    }
+
+    private func modelResponse(
+        for job: CognitionJob,
+        snapshot: LocalCognitionSnapshot,
+        baseResult: CognitionJobResult
+    ) async throws -> LocalCognitionModelResponse {
         var request = URLRequest(url: configuration.chatCompletionsURL)
         request.httpMethod = "POST"
         request.timeoutInterval = configuration.timeoutSeconds
@@ -216,7 +289,10 @@ struct LocalOpenAICompatibleCognitionProvider {
         guard let content = completion.choices.first?.message.content else {
             throw LocalOpenAICompatibleCognitionError.missingChoiceContent
         }
-        return try Self.decodeModelOutput(content)
+        return try LocalCognitionModelResponse(
+            output: Self.decodeModelOutput(content),
+            rawContent: content
+        )
     }
 
     private func requestBody(
@@ -446,6 +522,85 @@ struct LocalOpenAICompatibleCognitionProvider {
             .prefix(limit)
         return cleaned.isEmpty ? fallback : Array(cleaned)
     }
+
+    private func milliseconds(from start: Date, to end: Date) -> Int {
+        max(0, Int((end.timeIntervalSince(start) * 1_000).rounded()))
+    }
+
+    private func diagnosticReason(for error: Error) -> String {
+        switch error {
+        case LocalOpenAICompatibleCognitionError.encodeFailed:
+            return "encode_failed"
+        case LocalOpenAICompatibleCognitionError.invalidHTTPResponse:
+            return "invalid_http_response"
+        case LocalOpenAICompatibleCognitionError.httpStatus(let status):
+            return "http_status_\(status)"
+        case LocalOpenAICompatibleCognitionError.missingChoiceContent:
+            return "missing_choice_content"
+        case LocalOpenAICompatibleCognitionError.invalidModelJSON:
+            return "invalid_model_json"
+        default:
+            return String(describing: type(of: error))
+        }
+    }
+
+    private func changedFields(base: CognitionJobResult, local: CognitionJobResult) -> [String] {
+        var fields: [String] = []
+        if base.summary != local.summary {
+            fields.append("summary")
+        }
+        if base.confidence != local.confidence {
+            fields.append("confidence")
+        }
+        if base.provenance.providerID != local.provenance.providerID ||
+            base.provenance.method != local.provenance.method ||
+            base.provenance.model != local.provenance.model {
+            fields.append("provenance")
+        }
+
+        switch base.kind {
+        case .runSummary:
+            break
+        case .taskHealth:
+            if base.taskHealth?.summary != local.taskHealth?.summary {
+                fields.append("task_health.summary")
+            }
+            if base.taskHealth?.rationale != local.taskHealth?.rationale {
+                fields.append("task_health.rationale")
+            }
+            if base.taskHealth?.recommendedAction != local.taskHealth?.recommendedAction {
+                fields.append("task_health.recommended_action")
+            }
+        case .attentionSignal:
+            if base.attentionSignal?.title != local.attentionSignal?.title {
+                fields.append("attention.title")
+            }
+            if base.attentionSignal?.message != local.attentionSignal?.message {
+                fields.append("attention.message")
+            }
+            if base.attentionSignal?.recommendedAction != local.attentionSignal?.recommendedAction {
+                fields.append("attention.recommended_action")
+            }
+        case .stateCompression:
+            if base.compressedState?.latestOutcome != local.compressedState?.latestOutcome {
+                fields.append("compressed_state.latest_outcome")
+            }
+            if base.compressedState?.blockers != local.compressedState?.blockers {
+                fields.append("compressed_state.blockers")
+            }
+            if base.compressedState?.nextLikelyAction != local.compressedState?.nextLikelyAction {
+                fields.append("compressed_state.next_likely_action")
+            }
+        }
+
+        return fields
+    }
+
+    private func boundedMultiline(_ text: String, maxCharacters: Int) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maxCharacters else { return trimmed }
+        return String(trimmed.prefix(maxCharacters)) + "..."
+    }
 }
 
 struct LocalCognitionModelOutput: Codable, Equatable, Sendable {
@@ -501,9 +656,15 @@ enum LocalOpenAICompatibleCognitionExecutor {
 
         Task { @MainActor in
             let provider = LocalOpenAICompatibleCognitionProvider(configuration: configuration, httpClient: httpClient)
-            let results = await provider.results(for: snapshot, jobs: jobs, baseResults: baseResults)
+            let runResult = await provider.run(for: snapshot, jobs: jobs, baseResults: baseResults)
             OperationalCognitionRuntime(provider: LocalCognitionAuditProvider())
-                .recordResults(results, task: task, run: run, modelContext: modelContext)
+                .recordResults(runResult.results, task: task, run: run, modelContext: modelContext)
+            recordDiagnosticsIfNeeded(
+                runResult.diagnostics,
+                task: task,
+                run: run,
+                modelContext: modelContext
+            )
             WorkspacePersistenceCoordinator.saveAndAutoExport(
                 workspace: task.workspace,
                 modelContext: modelContext,
@@ -515,6 +676,33 @@ enum LocalOpenAICompatibleCognitionExecutor {
                 ]
             )
         }
+    }
+
+    private static func recordDiagnosticsIfNeeded(
+        _ diagnostics: LocalCognitionRunDiagnostics,
+        task: AgentTask,
+        run: TaskRun,
+        modelContext: ModelContext
+    ) {
+        guard !task.events.contains(where: {
+            $0.type == OperationalCognitionEventTypes.localDiagnostics && $0.run?.id == run.id
+        }) else {
+            return
+        }
+        guard let payload = diagnostics.encodedPayload() else {
+            AppLogger.audit(.runtimePersistenceSummary, category: "Cognition", taskID: task.id, fields: [
+                "result": "local_diagnostics_encode_failed",
+                "provider": diagnostics.providerID,
+                "method": diagnostics.method
+            ], level: .warning)
+            return
+        }
+        modelContext.insert(TaskEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: payload,
+            run: run
+        ))
     }
 
     private static func deterministicBaseResults(
