@@ -1532,6 +1532,107 @@ struct TaskThreadSnapshotTests {
         })
     }
 
+    @Test("Local cognition signal promotes latest AI review summary")
+    func localCognitionSignalPromotesLatestAIReviewSummary() throws {
+        let task = makeTask(status: .completed)
+        let olderDiagnostics = LocalCognitionRunDiagnostics(
+            providerID: "local.openai-compatible.lmstudio",
+            method: "local-openai-compatible-json-v1",
+            model: "astra-cognition",
+            endpoint: "http://localhost:1234/v1/chat/completions",
+            generatedAt: Date(timeIntervalSince1970: 1),
+            totalLatencyMilliseconds: 800,
+            jobs: [
+                LocalCognitionJobDiagnostics(
+                    kind: .runSummary,
+                    status: .success,
+                    latencyMilliseconds: 800,
+                    fallbackReason: nil,
+                    deterministicSummary: "Run completed.",
+                    localSummary: "Older local summary.",
+                    changedFields: ["summary"],
+                    rawModelOutput: nil
+                )
+            ]
+        )
+        let newerDiagnostics = LocalCognitionRunDiagnostics(
+            providerID: "local.openai-compatible.lmstudio",
+            method: "local-openai-compatible-json-v1",
+            model: "astra-cognition",
+            endpoint: "http://localhost:1234/v1/chat/completions",
+            generatedAt: Date(timeIntervalSince1970: 2),
+            totalLatencyMilliseconds: 1_100,
+            jobs: [
+                LocalCognitionJobDiagnostics(
+                    kind: .taskHealth,
+                    status: .success,
+                    latencyMilliseconds: 1_100,
+                    fallbackReason: nil,
+                    deterministicSummary: "Task completed.",
+                    localSummary: "Latest local review says this is ready to inspect.",
+                    changedFields: ["summary", "task_health.summary"],
+                    rawModelOutput: nil
+                )
+            ]
+        )
+        task.events.append(makeEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: try #require(olderDiagnostics.encodedPayload()),
+            timestamp: Date(timeIntervalSince1970: 10)
+        ))
+        task.events.append(makeEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: try #require(newerDiagnostics.encodedPayload()),
+            timestamp: Date(timeIntervalSince1970: 20)
+        ))
+
+        let signal = try #require(TaskOperationalCognitionSignal.latest(for: task))
+
+        #expect(signal.kind == .aiReview)
+        #expect(signal.compactLabel == "AI review")
+        #expect(signal.summary == "Latest local review says this is ready to inspect.")
+        #expect(!signal.isWarning)
+    }
+
+    @Test("Local cognition signal reports fallback when no local summary is usable")
+    func localCognitionSignalReportsFallbackWithoutSummary() throws {
+        let task = makeTask(status: .completed)
+        let diagnostics = LocalCognitionRunDiagnostics(
+            providerID: "local.openai-compatible.lmstudio",
+            method: "local-openai-compatible-json-v1",
+            model: "astra-cognition",
+            endpoint: "http://localhost:1234/v1/chat/completions",
+            generatedAt: Date(timeIntervalSince1970: 2),
+            totalLatencyMilliseconds: 1_100,
+            jobs: [
+                LocalCognitionJobDiagnostics(
+                    kind: .taskHealth,
+                    status: .fallback,
+                    latencyMilliseconds: 1_100,
+                    fallbackReason: "invalid_model_json",
+                    deterministicSummary: "Task completed.",
+                    localSummary: nil,
+                    changedFields: [],
+                    rawModelOutput: nil
+                )
+            ]
+        )
+        task.events.append(makeEvent(
+            task: task,
+            type: OperationalCognitionEventTypes.localDiagnostics,
+            payload: try #require(diagnostics.encodedPayload()),
+            timestamp: Date(timeIntervalSince1970: 20)
+        ))
+
+        let signal = try #require(TaskOperationalCognitionSignal.latest(for: task))
+
+        #expect(signal.kind == .localFallback)
+        #expect(signal.compactLabel == "AI fallback")
+        #expect(signal.isWarning)
+    }
+
     @Test("Budget warning is promoted to an inline run notice")
     func budgetWarningPromotesToInlineRunNotice() {
         let task = makeTask()

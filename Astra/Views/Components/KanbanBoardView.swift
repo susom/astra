@@ -1575,6 +1575,10 @@ struct KanbanTaskCardView: View {
         }
     }
 
+    private var operationalCognitionSignal: TaskOperationalCognitionSignal? {
+        TaskOperationalCognitionSignal.latest(for: task)
+    }
+
     private var showsOutcomeAccent: Bool {
         (category == .review || category == .done) && outcomeState != nil
     }
@@ -1616,7 +1620,7 @@ struct KanbanTaskCardView: View {
     }
 
     private var reservesMetadataRow: Bool {
-        showDetails || titleBadge != nil || category == .review || category == .done
+        showDetails || titleBadge != nil || operationalCognitionSignal != nil || category == .review || category == .done
     }
 
     /// Middle-ellipsize identifier-like tokens (long, contain `. _ - /`) so
@@ -1666,6 +1670,12 @@ struct KanbanTaskCardView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .help("Ticket \(titleBadge)")
+                    } else if let signal = operationalCognitionSignal {
+                        Image(systemName: signal.systemImage)
+                            .font(Stanford.ui(10, weight: .semibold))
+                            .foregroundStyle(signal.isWarning ? Stanford.poppy : Stanford.lagunita)
+                            .help(signal.helpText)
+                            .accessibilityLabel(signal.title)
                     } else {
                         Color.clear
                             .frame(height: 12)
@@ -1758,6 +1768,9 @@ struct KanbanTaskCardView: View {
         }
         if let badge = titleBadge {
             parts.append("identifier \(badge)")
+        }
+        if let signal = operationalCognitionSignal {
+            parts.append(signal.title)
         }
         parts.append(task.title)
         return parts.joined(separator: ", ")

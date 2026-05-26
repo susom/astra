@@ -1806,6 +1806,10 @@ private struct SidebarThreadRow: View {
         }
     }
 
+    private var operationalCognitionSignal: TaskOperationalCognitionSignal? {
+        TaskOperationalCognitionSignal.latest(for: task)
+    }
+
     /// Inline chip surfaced next to the timestamp when the task isn't in a
     /// quiet state. Draft / completed fall through to nil so the row is
     /// title + time only — keeps the right gutter scannable.
@@ -1850,6 +1854,14 @@ private struct SidebarThreadRow: View {
                             .background(Color.primary.opacity(0.04))
                             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                             .fixedSize()
+                    }
+
+                    if let signal = operationalCognitionSignal {
+                        Image(systemName: signal.systemImage)
+                            .font(Stanford.ui(10, weight: .semibold))
+                            .foregroundStyle(signal.isWarning ? Stanford.poppy : Stanford.lagunita)
+                            .help(signal.helpText)
+                            .accessibilityLabel(signal.title)
                     }
                 }
 
@@ -1930,11 +1942,14 @@ private struct SidebarThreadRow: View {
     }
 
     private var secondaryText: String? {
-        subtitle ?? statusLabel
+        subtitle ?? statusLabel ?? operationalCognitionSignal?.compactLabel
     }
 
     private var secondaryTextColor: Color {
         guard subtitle == nil else { return .secondary }
+        if let signal = operationalCognitionSignal, statusLabel == nil {
+            return (signal.isWarning ? Stanford.poppy : Stanford.lagunita).opacity(0.84)
+        }
         switch task.status {
         case .running:
             return Stanford.lagunita.opacity(0.82)
