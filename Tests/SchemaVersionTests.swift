@@ -42,6 +42,11 @@ struct SchemaVersionTests {
         #expect(ASTRASchemaV7.models.count == 11)
     }
 
+    @Test("SchemaV8 declares Workspace App runs and events")
+    func v8ModelCount() {
+        #expect(ASTRASchemaV8.models.count == 13)
+    }
+
     @Test("SchemaV1 version identifier is 1.0.0")
     func v1VersionIdentifier() {
         #expect(ASTRASchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
@@ -77,14 +82,19 @@ struct SchemaVersionTests {
         #expect(ASTRASchemaV7.versionIdentifier == Schema.Version(7, 0, 0))
     }
 
-    @Test("Migration plan lists SchemaV1 through SchemaV7")
-    func migrationPlanHasVersions() {
-        #expect(ASTRAMigrationPlan.schemas.count == 7)
+    @Test("SchemaV8 version identifier is 8.0.0")
+    func v8VersionIdentifier() {
+        #expect(ASTRASchemaV8.versionIdentifier == Schema.Version(8, 0, 0))
     }
 
-    @Test("Migration plan has V1 to V7 lightweight stages")
+    @Test("Migration plan lists SchemaV1 through SchemaV8")
+    func migrationPlanHasVersions() {
+        #expect(ASTRAMigrationPlan.schemas.count == 8)
+    }
+
+    @Test("Migration plan has V1 to V8 lightweight stages")
     func migrationPlanHasStage() {
-        #expect(ASTRAMigrationPlan.stages.count == 6)
+        #expect(ASTRAMigrationPlan.stages.count == 7)
     }
 
     @Test("ModelContainer can be created with versioned schema")
@@ -95,7 +105,7 @@ struct SchemaVersionTests {
             migrationPlan: ASTRAMigrationPlan.self,
             configurations: [config]
         )
-        #expect(container.schema.entities.count == 11)
+        #expect(container.schema.entities.count == 13)
     }
 
     @MainActor
@@ -173,6 +183,11 @@ struct SchemaVersionTests {
 
         let apps = try context.fetch(FetchDescriptor<WorkspaceApp>())
         #expect(apps.isEmpty)
+
+        let appRuns = try context.fetch(FetchDescriptor<WorkspaceAppRun>())
+        #expect(appRuns.isEmpty)
+        let appRunEvents = try context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+        #expect(appRunEvents.isEmpty)
     }
 
     @MainActor
@@ -441,5 +456,45 @@ struct SchemaVersionTests {
 
         let apps = try context.fetch(FetchDescriptor<WorkspaceApp>())
         #expect(apps.isEmpty)
+    }
+
+    @MainActor
+    @Test("SchemaV7 store migrates to SchemaV8 app run models")
+    func v7StoreMigratesToWorkspaceAppRunModels() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("astra-schema-v7-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = root.appendingPathComponent("store.store")
+        var oldContainer: ModelContainer? = try ModelContainer(
+            for: Schema(versionedSchema: ASTRASchemaV7.self),
+            configurations: [ModelConfiguration(url: storeURL)]
+        )
+
+        let oldContext = try #require(oldContainer?.mainContext)
+        let oldWorkspace = Workspace(name: "Legacy V7", primaryPath: "/tmp/legacy-v7")
+        oldContext.insert(oldWorkspace)
+        let oldApp = WorkspaceApp(
+            workspaceID: oldWorkspace.id,
+            logicalID: "legacy-app",
+            name: "Legacy App",
+            manifestRelativePath: ".astra/apps/legacy-app/manifest.json",
+            appDirectoryRelativePath: ".astra/apps/legacy-app",
+            manifestDigest: "digest"
+        )
+        oldContext.insert(oldApp)
+        try oldContext.save()
+        oldContainer = nil
+
+        let migratedContainer = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(url: storeURL)]
+        )
+        let context = migratedContainer.mainContext
+        #expect(try context.fetch(FetchDescriptor<WorkspaceApp>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppRun>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppRunEvent>()).isEmpty)
     }
 }

@@ -1537,9 +1537,33 @@ enum ASTRASchemaV7: VersionedSchema {
     }
 }
 
+/// V8 adds Workspace App runs and run events for app-level action, refresh,
+/// automation, and pipeline execution history.
+enum ASTRASchemaV8: VersionedSchema {
+    static var versionIdentifier = Schema.Version(8, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [
+            Workspace.self,
+            AgentTask.self,
+            TaskRun.self,
+            TaskEvent.self,
+            Artifact.self,
+            Skill.self,
+            Connector.self,
+            LocalTool.self,
+            TaskTemplate.self,
+            TaskSchedule.self,
+            WorkspaceApp.self,
+            WorkspaceAppRun.self,
+            WorkspaceAppRunEvent.self
+        ]
+    }
+}
+
 enum ASTRASchema {
     static var current: Schema {
-        Schema(versionedSchema: ASTRASchemaV7.self)
+        Schema(versionedSchema: ASTRASchemaV8.self)
     }
 }
 
@@ -1552,7 +1576,8 @@ enum ASTRAMigrationPlan: SchemaMigrationPlan {
             ASTRASchemaV4.self,
             ASTRASchemaV5.self,
             ASTRASchemaV6.self,
-            ASTRASchemaV7.self
+            ASTRASchemaV7.self,
+            ASTRASchemaV8.self
         ]
     }
 
@@ -1563,7 +1588,8 @@ enum ASTRAMigrationPlan: SchemaMigrationPlan {
             .lightweight(fromVersion: ASTRASchemaV3.self, toVersion: ASTRASchemaV4.self),
             .lightweight(fromVersion: ASTRASchemaV4.self, toVersion: ASTRASchemaV5.self),
             .lightweight(fromVersion: ASTRASchemaV5.self, toVersion: ASTRASchemaV6.self),
-            .lightweight(fromVersion: ASTRASchemaV6.self, toVersion: ASTRASchemaV7.self)
+            .lightweight(fromVersion: ASTRASchemaV6.self, toVersion: ASTRASchemaV7.self),
+            .lightweight(fromVersion: ASTRASchemaV7.self, toVersion: ASTRASchemaV8.self)
         ]
     }
 }
