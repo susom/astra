@@ -1,0 +1,256 @@
+import Foundation
+import SQLite3
+
+private let workspaceAppSQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+enum WorkspaceAppStorageError: LocalizedError, Equatable {
+    case invalidIdentifier(String)
+    case unsupportedColumnType(String)
+    case openFailed(String)
+    case prepareFailed(String)
+    case executeFailed(String)
+    case bindFailed(String)
+    case missingRecordValues
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidIdentifier(let value):
+            "Invalid app storage identifier: \(value)"
+        case .unsupportedColumnType(let value):
+            "Unsupported app storage column type: \(value)"
+        case .openFailed(let message):
+            "Could not open app storage database: \(message)"
+        case .prepareFailed(let message):
+            "Could not prepare app storage SQL: \(message)"
+        case .executeFailed(let message):
+            "Could not execute app storage SQL: \(message)"
+        case .bindFailed(let message):
+            "Could not bind app storage value: \(message)"
+        case .missingRecordValues:
+            "Record must contain at least one value."
+        }
+    }
+}
+
+enum WorkspaceAppStorageValue: Codable, Sendable, Equatable {
+    case null
+    case text(String)
+    case integer(Int64)
+    case real(Double)
+    case bool(Bool)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let bool = try? container.decode(Bool.self) {
+            self = .bool(bool)
+        } else if let integer = try? container.decode(Int64.self) {
+            self = .integer(integer)
+        } else if let real = try? container.decode(Double.self) {
+            self = .real(real)
+        } else {
+            self = .text(try container.decode(String.self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null:
+            try container.encodeNil()
+        case .text(let value):
+            try container.encode(value)
+        case .integer(let value):
+            try container.encode(value)
+        case .real(let value):
+            try container.encode(value)
+        case .bool(let value):
+            try container.encode(value)
+        }
+    }
+}
+
+struct WorkspaceAppStorageService {
+    var fileManager: FileManager = .default
+
+    func applySchema(_ schema: WorkspaceAppStorageSchema, databaseURL: URL) throws {
+        try fileManager.createDirectory(
+            at: databaseURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try withDatabase(at: databaseURL) { database in
+            try execute("PRAGMA foreign_keys = ON;", database: database)
+            try execute("PRAGMA journal_mode = WAL;", database: database)
+            try execute("""
+            CREATE TABLE IF NOT EXISTS "__astra_storage_metadata" (
+              "key" TEXT PRIMARY KEY,
+              "value" TEXT NOT NULL
+            );
+            """, database: database)
+            for table in schema.tables {
+                try execute(try createTableSQL(for: table), database: database)
+            }
+        }
+    }
+
+    func insertRecord(
+        _ record: [String: WorkspaceAppStorageValue],
+        into table: String,
+        databaseURL: URL
+    ) throws {
+        guard !record.isEmpty else { throw WorkspaceAppStorageError.missingRecordValues }
+        let tableName = try quotedIdentifier(table)
+        let columns = try record.keys.sorted().map(quotedIdentifier)
+        let placeholders = Array(repeating: "?", count: columns.count).joined(separator: ", ")
+        let sql = "INSERT INTO \(tableName) (\(columns.joined(separator: ", "))) VALUES (\(placeholders));"
+        try withDatabase(at: databaseURL) { database in
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw WorkspaceAppStorageError.prepareFailed(lastError(database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            for (index, key) in record.keys.sorted().enumerated() {
+                try bind(record[key] ?? .null, to: Int32(index + 1), statement: statement, database: database)
+            }
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw WorkspaceAppStorageError.executeFailed(lastError(database))
+            }
+        }
+    }
+
+    func records(
+        in table: String,
+        databaseURL: URL,
+        limit: Int = 100
+    ) throws -> [[String: WorkspaceAppStorageValue]] {
+        let tableName = try quotedIdentifier(table)
+        let safeLimit = max(1, min(limit, 10_000))
+        let sql = "SELECT * FROM \(tableName) ORDER BY rowid ASC LIMIT \(safeLimit);"
+        return try withDatabase(at: databaseURL) { database in
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw WorkspaceAppStorageError.prepareFailed(lastError(database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            var rows: [[String: WorkspaceAppStorageValue]] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                var row: [String: WorkspaceAppStorageValue] = [:]
+                for index in 0..<sqlite3_column_count(statement) {
+                    let name = sqlite3_column_name(statement, index).map { String(cString: $0) } ?? ""
+                    row[name] = value(at: index, statement: statement)
+                }
+                rows.append(row)
+            }
+            return rows
+        }
+    }
+
+    private func createTableSQL(for table: WorkspaceAppStorageTable) throws -> String {
+        let tableName = try quotedIdentifier(table.name)
+        let columns = try table.columns.map { column in
+            var parts = [
+                try quotedIdentifier(column.name),
+                try sqliteType(for: column.type)
+            ]
+            if column.primaryKey {
+                parts.append("PRIMARY KEY")
+            }
+            if column.required {
+                parts.append("NOT NULL")
+            }
+            return parts.joined(separator: " ")
+        }
+        return "CREATE TABLE IF NOT EXISTS \(tableName) (\(columns.joined(separator: ", ")));"
+    }
+
+    private func sqliteType(for type: String) throws -> String {
+        switch type {
+        case "bool":
+            "INTEGER"
+        case "datetime", "json", "text", "uuid":
+            "TEXT"
+        case "integer":
+            "INTEGER"
+        case "real":
+            "REAL"
+        default:
+            throw WorkspaceAppStorageError.unsupportedColumnType(type)
+        }
+    }
+
+    private func quotedIdentifier(_ value: String) throws -> String {
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        guard !value.isEmpty,
+              value.rangeOfCharacter(from: allowed.inverted) == nil else {
+            throw WorkspaceAppStorageError.invalidIdentifier(value)
+        }
+        return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+    }
+
+    private func withDatabase<T>(at url: URL, body: (OpaquePointer) throws -> T) throws -> T {
+        var database: OpaquePointer?
+        guard sqlite3_open(url.path, &database) == SQLITE_OK, let database else {
+            let message = database.map(lastError) ?? "unknown"
+            if let database { sqlite3_close(database) }
+            throw WorkspaceAppStorageError.openFailed(message)
+        }
+        defer { sqlite3_close(database) }
+        return try body(database)
+    }
+
+    private func execute(_ sql: String, database: OpaquePointer) throws {
+        var errorMessage: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(database, sql, nil, nil, &errorMessage)
+        guard result == SQLITE_OK else {
+            let message = errorMessage.map { String(cString: $0) } ?? lastError(database)
+            sqlite3_free(errorMessage)
+            throw WorkspaceAppStorageError.executeFailed(message)
+        }
+    }
+
+    private func bind(
+        _ value: WorkspaceAppStorageValue,
+        to index: Int32,
+        statement: OpaquePointer,
+        database: OpaquePointer
+    ) throws {
+        let result: Int32
+        switch value {
+        case .null:
+            result = sqlite3_bind_null(statement, index)
+        case .text(let value):
+            result = sqlite3_bind_text(statement, index, value, -1, workspaceAppSQLiteTransient)
+        case .integer(let value):
+            result = sqlite3_bind_int64(statement, index, value)
+        case .real(let value):
+            result = sqlite3_bind_double(statement, index, value)
+        case .bool(let value):
+            result = sqlite3_bind_int64(statement, index, value ? 1 : 0)
+        }
+        guard result == SQLITE_OK else {
+            throw WorkspaceAppStorageError.bindFailed(lastError(database))
+        }
+    }
+
+    private func value(at index: Int32, statement: OpaquePointer) -> WorkspaceAppStorageValue {
+        switch sqlite3_column_type(statement, index) {
+        case SQLITE_NULL:
+            .null
+        case SQLITE_INTEGER:
+            .integer(sqlite3_column_int64(statement, index))
+        case SQLITE_FLOAT:
+            .real(sqlite3_column_double(statement, index))
+        case SQLITE_TEXT:
+            .text(sqlite3_column_text(statement, index).map { String(cString: $0) } ?? "")
+        default:
+            .null
+        }
+    }
+
+    private func lastError(_ database: OpaquePointer) -> String {
+        sqlite3_errmsg(database).map { String(cString: $0) } ?? "unknown"
+    }
+}

@@ -87,8 +87,13 @@ struct WorkspaceAppManifestTests {
             in: workspace,
             modelContext: context
         )
+        let databaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
+            workspacePath: workspace.primaryPath,
+            appID: manifest.app.id
+        ))
 
         #expect(FileManager.default.fileExists(atPath: result.manifestURL.path))
+        #expect(FileManager.default.fileExists(atPath: databaseURL.path))
         #expect(result.app.logicalID == "enrollment-reconciliation")
         #expect(result.app.name == "Enrollment Reconciliation")
         #expect(result.app.manifestRelativePath == ".astra/apps/enrollment-reconciliation/manifest.json")

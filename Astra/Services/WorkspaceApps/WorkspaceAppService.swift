@@ -6,6 +6,7 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
     case invalidManifest([WorkspaceAppManifestValidationReport.Issue])
     case emptyWorkspacePath
     case encodeFailed(String)
+    case storageFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
             return "Workspace path is empty."
         case .encodeFailed(let message):
             return "Could not encode workspace app manifest: \(message)"
+        case .storageFailed(let message):
+            return "Could not initialize workspace app storage: \(message)"
         }
     }
 }
@@ -27,6 +30,7 @@ struct WorkspaceAppCreationResult {
 
 struct WorkspaceAppService {
     var fileManager: FileManager = .default
+    var storageService = WorkspaceAppStorageService()
 
     @MainActor
     func createApp(
@@ -46,6 +50,7 @@ struct WorkspaceAppService {
         let appID = manifest.app.id
         let dataDirectory = WorkspaceFileLayout.appDataDirectory(workspacePath: workspace.primaryPath, appID: appID)
         let manifestPath = WorkspaceFileLayout.appManifestFile(workspacePath: workspace.primaryPath, appID: appID)
+        let databasePath = WorkspaceFileLayout.appDatabaseFile(workspacePath: workspace.primaryPath, appID: appID)
         try fileManager.createDirectory(atPath: dataDirectory, withIntermediateDirectories: true)
 
         let manifestData: Data
@@ -55,6 +60,13 @@ struct WorkspaceAppService {
             throw WorkspaceAppServiceError.encodeFailed(String(describing: error))
         }
         try manifestData.write(to: URL(fileURLWithPath: manifestPath), options: [.atomic])
+        if let storage = manifest.storage {
+            do {
+                try storageService.applySchema(storage, databaseURL: URL(fileURLWithPath: databasePath))
+            } catch {
+                throw WorkspaceAppServiceError.storageFailed(String(describing: error))
+            }
+        }
 
         let now = Date()
         let app = WorkspaceApp(
