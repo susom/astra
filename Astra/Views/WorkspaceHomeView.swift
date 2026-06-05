@@ -270,6 +270,7 @@ struct WorkspaceHomeContainerView: View {
     var onManageCapabilities: (() -> Void)?
 
     @Query private var tasks: [AgentTask]
+    @Query private var apps: [WorkspaceApp]
 
     init(
         workspace: Workspace,
@@ -303,12 +304,20 @@ struct WorkspaceHomeContainerView: View {
             },
             sort: \AgentTask.queuePosition
         )
+        _apps = Query(
+            filter: #Predicate<WorkspaceApp> { app in
+                app.workspaceID == workspaceID
+            },
+            sort: \WorkspaceApp.updatedAt,
+            order: .reverse
+        )
     }
 
     var body: some View {
         WorkspaceHomeView(
             workspace: workspace,
             tasks: tasks,
+            apps: apps,
             onCreateTask: onCreateTask,
             onOpenTask: onOpenTask,
             onDeleteTask: onDeleteTask,
@@ -324,6 +333,7 @@ struct WorkspaceHomeContainerView: View {
 struct WorkspaceHomeView: View {
     let workspace: Workspace
     let tasks: [AgentTask]
+    var apps: [WorkspaceApp] = []
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onDeleteTask: (AgentTask) -> Void
@@ -355,6 +365,11 @@ struct WorkspaceHomeView: View {
 
                     workspaceContextCard
                         .padding(.bottom, 20)
+
+                    if WorkspaceAppsPresentation.shouldShowSection(apps: apps) {
+                        workspaceAppsSection
+                            .padding(.bottom, 20)
+                    }
                 }
                 .frame(maxWidth: alignedContentWidth, alignment: .leading)
                 .padding(.horizontal, KanbanBoardLayout.outerPadding)
@@ -474,6 +489,34 @@ struct WorkspaceHomeView: View {
             capabilitiesSummaryRow
         }
         .workspaceSectionPanel()
+    }
+
+    private var workspaceAppsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(WorkspaceAppsPresentation.sectionTitle)
+                    .font(Stanford.caption(13).weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                Text("\(apps.count)")
+                    .font(Stanford.caption(12).weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            LazyVGrid(
+                columns: [
+                    GridItem(.adaptive(minimum: 280, maximum: 420), spacing: 12, alignment: .top)
+                ],
+                alignment: .leading,
+                spacing: 12
+            ) {
+                ForEach(WorkspaceAppsPresentation.cards(for: apps)) { app in
+                    WorkspaceAppCardView(app: app)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -868,6 +911,86 @@ private struct WorkspaceSectionPanelModifier: ViewModifier {
                 RoundedRectangle(cornerRadius: WorkspaceHomePresentation.cardCornerRadius, style: .continuous)
                     .stroke(Color.primary.opacity(0.05), lineWidth: 1)
             )
+    }
+}
+
+private struct WorkspaceAppCardView: View {
+    let app: WorkspaceAppCardPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: app.icon)
+                    .font(Stanford.ui(18, weight: .semibold))
+                    .foregroundStyle(Stanford.lagunita)
+                    .frame(width: 26, height: 26)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(app.name)
+                        .font(Stanford.ui(14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(app.subtitle)
+                        .font(Stanford.caption(12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(app.primaryActionTitle)
+                    .font(Stanford.caption(11).weight(.semibold))
+                    .foregroundStyle(app.primaryActionTitle == "Disabled" ? .secondary : Stanford.lagunita)
+            }
+
+            HStack(spacing: 8) {
+                WorkspaceAppStatusPill(
+                    label: app.statusLabel,
+                    systemImage: app.statusSystemImage
+                )
+
+                if let dependencyLabel = app.dependencyLabel,
+                   let dependencySystemImage = app.dependencySystemImage {
+                    WorkspaceAppStatusPill(
+                        label: dependencyLabel,
+                        systemImage: dependencySystemImage,
+                        isWarning: true
+                    )
+                }
+
+                Spacer(minLength: 8)
+
+                Text(app.lastActivityLabel)
+                    .font(Stanford.caption(11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: WorkspaceAppsPresentation.cardMinHeight, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .fill(Color.primary.opacity(0.025))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct WorkspaceAppStatusPill: View {
+    let label: String
+    let systemImage: String
+    var isWarning = false
+
+    var body: some View {
+        Label(label, systemImage: systemImage)
+            .font(Stanford.caption(11).weight(.semibold))
+            .foregroundStyle(isWarning ? Color.orange : Color.secondary)
+            .lineLimit(1)
     }
 }
 
