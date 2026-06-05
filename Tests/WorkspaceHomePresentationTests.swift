@@ -224,4 +224,39 @@ struct WorkspaceHomePresentationTests {
         #expect(!actions[2].isEnabled)
         #expect(actions[2].disabledReason == "This action type is not wired into the app renderer yet.")
     }
+
+    @Test("App Studio turns a local database intent into a valid publishable draft")
+    func appStudioBuildsValidLocalDatabaseDraft() {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+
+        #expect(draft.workspaceID == workspace.id)
+        #expect(draft.canPublish)
+        #expect(draft.manifest.app.id == "grocery-tracker")
+        #expect(draft.manifest.storage?.tables.map(\.name) == ["items", "shopping_lists", "purchases"])
+        #expect(draft.manifest.views.map(\.type).contains("dashboard"))
+        #expect(draft.manifest.actions.contains { $0.type == "appStorage.insert" })
+        #expect(draft.manifest.permissions.defaultMode == .draftOnly)
+    }
+
+    @Test("App Studio publishing assigns unique logical IDs")
+    func appStudioPublishManifestAvoidsExistingLogicalIDs() {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+
+        let manifest = WorkspaceAppStudioBuilder.manifestForPublishing(
+            draft.manifest,
+            existingLogicalIDs: ["grocery-tracker", "grocery-tracker-2"]
+        )
+
+        #expect(manifest.app.id == "grocery-tracker-3")
+        #expect(manifest.app.name == "Grocery Tracker 3")
+    }
 }

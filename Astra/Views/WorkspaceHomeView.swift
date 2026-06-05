@@ -260,6 +260,7 @@ struct WorkspaceHomeContainerView: View {
     let workspace: Workspace
     let taskQueue: TaskQueue
     let onCreateTask: () -> Void
+    let onCreateApp: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
@@ -277,6 +278,7 @@ struct WorkspaceHomeContainerView: View {
         workspace: Workspace,
         taskQueue: TaskQueue,
         onCreateTask: @escaping () -> Void,
+        onCreateApp: @escaping () -> Void,
         onOpenTask: @escaping (AgentTask) -> Void,
         onOpenApp: @escaping (WorkspaceApp) -> Void,
         onDeleteTask: @escaping (AgentTask) -> Void,
@@ -290,6 +292,7 @@ struct WorkspaceHomeContainerView: View {
         self.workspace = workspace
         self.taskQueue = taskQueue
         self.onCreateTask = onCreateTask
+        self.onCreateApp = onCreateApp
         self.onOpenTask = onOpenTask
         self.onOpenApp = onOpenApp
         self.onDeleteTask = onDeleteTask
@@ -322,6 +325,7 @@ struct WorkspaceHomeContainerView: View {
             tasks: tasks,
             apps: apps,
             onCreateTask: onCreateTask,
+            onCreateApp: onCreateApp,
             onOpenTask: onOpenTask,
             onOpenApp: onOpenApp,
             onDeleteTask: onDeleteTask,
@@ -339,6 +343,7 @@ struct WorkspaceHomeView: View {
     let tasks: [AgentTask]
     var apps: [WorkspaceApp] = []
     let onCreateTask: () -> Void
+    let onCreateApp: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
@@ -471,6 +476,14 @@ struct WorkspaceHomeView: View {
                 .font(Stanford.heading(22))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+
+            Spacer()
+
+            Button(action: onCreateApp) {
+                Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus.app")
+            }
+            .buttonStyle(.bordered)
+            .help("Open App Studio")
         }
     }
 
@@ -484,6 +497,12 @@ struct WorkspaceHomeView: View {
                     .foregroundStyle(.primary)
 
                 Spacer()
+
+                Button(action: onCreateApp) {
+                    Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus")
+                }
+                .buttonStyle(.borderless)
+                .help("Open App Studio")
             }
             .padding(.bottom, 8)
 

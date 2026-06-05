@@ -295,6 +295,29 @@ struct ContentDetailPresentationTests {
         #expect(presentation == .workspaceApp)
     }
 
+    @Test("Workspace App Studio opens before the task composer")
+    func workspaceAppStudioTakesPrecedenceOverComposer() {
+        let workspace = makeWorkspace(name: "GitHub PRs")
+
+        let presentation = ContentDetailPresentation.resolve(
+            selectedTask: nil,
+            selectedWorkspaceApp: nil,
+            effectiveWorkspace: workspace,
+            isComposingTask: true,
+            isComposingWorkspaceApp: true
+        )
+
+        #expect(presentation == .workspaceAppStudio)
+    }
+
+    @Test("Workspace App Studio entry point is available from composer and home")
+    func workspaceAppStudioEntryPointIsAvailableFromComposerAndHome() {
+        #expect(WorkspaceAppStudioEntryPresentation.shouldShowNewAppEntry(for: .newTaskComposer))
+        #expect(WorkspaceAppStudioEntryPresentation.shouldShowNewAppEntry(for: .workspaceHome))
+        #expect(!WorkspaceAppStudioEntryPresentation.shouldShowNewAppEntry(for: .workspaceApp))
+        #expect(!WorkspaceAppStudioEntryPresentation.shouldShowNewAppEntry(for: .existingTask))
+    }
+
     @Test("Selected tasks take precedence over selected workspace apps")
     func selectedTaskTakesPrecedenceOverApp() {
         let workspace = makeWorkspace(name: "GitHub PRs")

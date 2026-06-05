@@ -386,7 +386,7 @@ private struct WorkspaceAppStorageRecordRow: View {
     }
 }
 
-private struct WorkspaceAppDetailNotice: View {
+struct WorkspaceAppDetailNotice: View {
     let title: String
     let message: String
     let systemImage: String

@@ -233,6 +233,9 @@ struct ContentView: View {
     @State private var selectedTask: AgentTask?
     @State private var selectedWorkspaceApp: WorkspaceApp?
     @State private var selectedWorkspace: Workspace?
+    @State private var isComposingWorkspaceApp = false
+    @State private var workspaceAppStudioInitialIntent = WorkspaceAppStudioBuilder.defaultIntent
+    @State private var workspaceAppStudioExistingManifest: WorkspaceAppManifest?
     @State private var showingConfigure = false
     @State private var configureInitialTab: ConfigureTab = .capabilities
     @State private var configureFocusItemID: UUID?
@@ -577,6 +580,7 @@ struct ContentView: View {
             onShowConfigure: openCapabilitiesManager,
             onDeleteWorkspace: deleteWorkspace,
             onRenameWorkspace: beginRenamingWorkspace,
+            onOpenAppStudio: openWorkspaceAppStudio,
             onNewSchedule: showNewSchedule,
             onEditSchedule: beginEditingSchedule,
             isSearchActive: $isSearchActive
@@ -612,6 +616,9 @@ struct ContentView: View {
             selectedTask: selectedTask,
             selectedWorkspaceApp: selectedWorkspaceApp,
             effectiveWorkspace: effectiveWorkspace,
+            isComposingWorkspaceApp: isComposingWorkspaceApp,
+            workspaceAppStudioInitialIntent: workspaceAppStudioInitialIntent,
+            workspaceAppStudioExistingManifest: workspaceAppStudioExistingManifest,
             isComposingTask: isComposingTask,
             taskQueue: runtime.taskQueue,
             browserSession: currentBrowserSession,
@@ -638,10 +645,14 @@ struct ContentView: View {
             onMoveToDraft: moveTaskToDraft,
             onForkTask: setSelectedTask,
             onCreateTask: startComposingTask,
+            onCreateApp: startComposingWorkspaceApp,
             onOpenTask: openExistingTask,
             onOpenApp: openWorkspaceApp,
+            onOpenAppStudio: openWorkspaceAppStudio,
             onRefreshApp: refreshWorkspaceApp,
             onRunAppAction: runWorkspaceAppAction,
+            onCancelAppStudio: cancelWorkspaceAppStudio,
+            onPublishAppDraft: publishWorkspaceAppDraft,
             onDeleteTask: requestDeleteTask,
             onSetDoneState: setDoneState,
             onRunQueue: runQueue,
@@ -1660,7 +1671,18 @@ struct ContentView: View {
     private func startComposingTask() {
         setSelectedTask(nil)
         selectedWorkspaceApp = nil
+        isComposingWorkspaceApp = false
         isComposingTask = true
+        presentRightRail(rememberShelfState: false)
+    }
+
+    private func startComposingWorkspaceApp() {
+        setSelectedTask(nil)
+        selectedWorkspaceApp = nil
+        isComposingTask = false
+        workspaceAppStudioInitialIntent = WorkspaceAppStudioBuilder.defaultIntent
+        workspaceAppStudioExistingManifest = nil
+        isComposingWorkspaceApp = true
         presentRightRail(rememberShelfState: false)
     }
 
@@ -1668,6 +1690,7 @@ struct ContentView: View {
         promoteDraftBrowserSessionIfNeeded(to: task)
         setSelectedTask(task)
         selectedWorkspaceApp = nil
+        isComposingWorkspaceApp = false
         isComposingTask = false
         runSingleTask(task)
     }
@@ -1676,6 +1699,7 @@ struct ContentView: View {
         promoteDraftBrowserSessionIfNeeded(to: task)
         setSelectedTask(task)
         selectedWorkspaceApp = nil
+        isComposingWorkspaceApp = false
         isComposingTask = false
         presentRightRail(rememberShelfState: false)
     }
@@ -1722,13 +1746,60 @@ struct ContentView: View {
     private func openExistingTask(_ task: AgentTask) {
         setSelectedTask(task)
         selectedWorkspaceApp = nil
+        isComposingWorkspaceApp = false
         isComposingTask = false
     }
 
     private func openWorkspaceApp(_ app: WorkspaceApp) {
         guard let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID }) else { return }
+        isComposingWorkspaceApp = false
         applyWorkspaceSelectionUpdate(workspaceSelectionCoordinator.open(app: app, workspace: workspace))
         recordWorkspaceAppOpened(app, workspace: workspace)
+    }
+
+    private func openWorkspaceAppStudio(_ app: WorkspaceApp) {
+        guard let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID }) else { return }
+        setSelectedTask(nil)
+        selectedWorkspace = workspace
+        selectedWorkspaceApp = nil
+        isComposingTask = false
+        workspaceAppStudioInitialIntent = app.appDescription.isEmpty ? app.name : app.appDescription
+        workspaceAppStudioExistingManifest = WorkspaceAppDetailDataLoader().load(app: app, workspace: workspace).manifest
+        isComposingWorkspaceApp = true
+        presentRightRail(rememberShelfState: false)
+    }
+
+    private func cancelWorkspaceAppStudio() {
+        isComposingWorkspaceApp = false
+        workspaceAppStudioExistingManifest = nil
+        workspaceAppStudioInitialIntent = WorkspaceAppStudioBuilder.defaultIntent
+    }
+
+    private func publishWorkspaceAppDraft(_ draft: WorkspaceAppStudioDraft) throws {
+        guard let workspace = effectiveWorkspace else {
+            throw WorkspaceAppServiceError.emptyWorkspacePath
+        }
+
+        let workspaceID = workspace.id
+        let descriptor = FetchDescriptor<WorkspaceApp>(
+            predicate: #Predicate<WorkspaceApp> { app in
+                app.workspaceID == workspaceID
+            }
+        )
+        let existingIDs = Set(try modelContext.fetch(descriptor).map(\.logicalID))
+        let manifest = WorkspaceAppStudioBuilder.manifestForPublishing(
+            draft.manifest,
+            existingLogicalIDs: existingIDs
+        )
+        let result = try WorkspaceAppService().createApp(
+            manifest: manifest,
+            in: workspace,
+            modelContext: modelContext,
+            status: .published
+        )
+        isComposingWorkspaceApp = false
+        workspaceAppStudioExistingManifest = nil
+        openWorkspaceApp(result.app)
     }
 
     private func refreshWorkspaceApp(_ app: WorkspaceApp) {
@@ -2756,6 +2827,9 @@ private struct ContentDetailAreaView: View {
     let selectedTask: AgentTask?
     let selectedWorkspaceApp: WorkspaceApp?
     let effectiveWorkspace: Workspace?
+    let isComposingWorkspaceApp: Bool
+    let workspaceAppStudioInitialIntent: String
+    let workspaceAppStudioExistingManifest: WorkspaceAppManifest?
     let isComposingTask: Bool
     let taskQueue: TaskQueue
     @ObservedObject var browserSession: ShelfBrowserSession
@@ -2796,10 +2870,14 @@ private struct ContentDetailAreaView: View {
     let onMoveToDraft: (AgentTask) -> Void
     let onForkTask: (AgentTask) -> Void
     let onCreateTask: () -> Void
+    let onCreateApp: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
+    let onOpenAppStudio: (WorkspaceApp) -> Void
     let onRefreshApp: (WorkspaceApp) -> Void
     let onRunAppAction: (WorkspaceAppActionSpec, WorkspaceApp, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
+    let onCancelAppStudio: () -> Void
+    let onPublishAppDraft: (WorkspaceAppStudioDraft) throws -> Void
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3150,6 +3228,9 @@ private struct ContentDetailAreaView: View {
             selectedTask: selectedTask,
             selectedWorkspaceApp: selectedWorkspaceApp,
             effectiveWorkspace: effectiveWorkspace,
+            isComposingWorkspaceApp: isComposingWorkspaceApp,
+            workspaceAppStudioInitialIntent: workspaceAppStudioInitialIntent,
+            workspaceAppStudioExistingManifest: workspaceAppStudioExistingManifest,
             isComposingTask: isComposingTask,
             taskQueue: taskQueue,
             sshReloadTrigger: sshReloadTrigger,
@@ -3168,10 +3249,14 @@ private struct ContentDetailAreaView: View {
             onMoveToDraft: onMoveToDraft,
             onForkTask: onForkTask,
             onCreateTask: onCreateTask,
+            onCreateApp: onCreateApp,
             onOpenTask: onOpenTask,
             onOpenApp: onOpenApp,
+            onOpenAppStudio: onOpenAppStudio,
             onRefreshApp: onRefreshApp,
             onRunAppAction: onRunAppAction,
+            onCancelAppStudio: onCancelAppStudio,
+            onPublishAppDraft: onPublishAppDraft,
             onDeleteTask: onDeleteTask,
             onSetDoneState: onSetDoneState,
             onRunQueue: onRunQueue,
@@ -3238,6 +3323,9 @@ private struct ContentDetailContentView: View {
     let selectedTask: AgentTask?
     let selectedWorkspaceApp: WorkspaceApp?
     let effectiveWorkspace: Workspace?
+    let isComposingWorkspaceApp: Bool
+    let workspaceAppStudioInitialIntent: String
+    let workspaceAppStudioExistingManifest: WorkspaceAppManifest?
     let isComposingTask: Bool
     let taskQueue: TaskQueue
     let sshReloadTrigger: Int
@@ -3256,10 +3344,14 @@ private struct ContentDetailContentView: View {
     let onMoveToDraft: (AgentTask) -> Void
     let onForkTask: (AgentTask) -> Void
     let onCreateTask: () -> Void
+    let onCreateApp: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
+    let onOpenAppStudio: (WorkspaceApp) -> Void
     let onRefreshApp: (WorkspaceApp) -> Void
     let onRunAppAction: (WorkspaceAppActionSpec, WorkspaceApp, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
+    let onCancelAppStudio: () -> Void
+    let onPublishAppDraft: (WorkspaceAppStudioDraft) throws -> Void
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3276,7 +3368,8 @@ private struct ContentDetailContentView: View {
             selectedTask: selectedTask,
             selectedWorkspaceApp: selectedWorkspaceApp,
             effectiveWorkspace: effectiveWorkspace,
-            isComposingTask: isComposingTask
+            isComposingTask: isComposingTask,
+            isComposingWorkspaceApp: isComposingWorkspaceApp
         ) {
         case .draftTask:
             if let task = selectedTask {
@@ -3320,7 +3413,7 @@ private struct ContentDetailContentView: View {
                 WorkspaceAppDetailView(
                     app: app,
                     workspace: effectiveWorkspace,
-                    onOpenStudio: {},
+                    onOpenStudio: { onOpenAppStudio(app) },
                     onRefresh: { onRefreshApp(app) },
                     onRunAction: { action, manifest, input in
                         try onRunAppAction(action, app, manifest, input)
@@ -3328,24 +3421,46 @@ private struct ContentDetailContentView: View {
                 )
                 .id(app.id)
             }
+        case .workspaceAppStudio:
+            if let workspace = effectiveWorkspace {
+                WorkspaceAppStudioView(
+                    workspace: workspace,
+                    initialIntent: workspaceAppStudioInitialIntent,
+                    existingManifest: workspaceAppStudioExistingManifest,
+                    onCancel: onCancelAppStudio,
+                    onPublish: onPublishAppDraft
+                )
+            }
         case .newTaskComposer:
-            ChatPanelView(
-                taskQueue: taskQueue,
-                workspace: effectiveWorkspace,
-                sshReloadTrigger: sshReloadTrigger,
-                onQuickRun: onQuickRun,
-                onTaskCreated: onTaskCreated,
-                onAddSSHConnection: onAddSSHConnection,
-                onManageSkills: onManageSkills,
-                isPlanCanvasVisible: isPlanCanvasVisible,
-                onOpenPlan: onOpenPlan
-            )
+            ZStack(alignment: .topTrailing) {
+                ChatPanelView(
+                    taskQueue: taskQueue,
+                    workspace: effectiveWorkspace,
+                    sshReloadTrigger: sshReloadTrigger,
+                    onQuickRun: onQuickRun,
+                    onTaskCreated: onTaskCreated,
+                    onAddSSHConnection: onAddSSHConnection,
+                    onManageSkills: onManageSkills,
+                    isPlanCanvasVisible: isPlanCanvasVisible,
+                    onOpenPlan: onOpenPlan
+                )
+
+                if WorkspaceAppStudioEntryPresentation.shouldShowNewAppEntry(for: .newTaskComposer) {
+                    Button(action: onCreateApp) {
+                        Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus.app")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(16)
+                    .help("Open App Studio")
+                }
+            }
         case .workspaceHome:
             if let workspace = effectiveWorkspace {
                 WorkspaceHomeContainerView(
                     workspace: workspace,
                     taskQueue: taskQueue,
                     onCreateTask: onCreateTask,
+                    onCreateApp: onCreateApp,
                     onOpenTask: onOpenTask,
                     onOpenApp: onOpenApp,
                     onDeleteTask: onDeleteTask,
