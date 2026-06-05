@@ -1515,9 +1515,31 @@ enum ASTRASchemaV6: VersionedSchema {
     }
 }
 
+/// V7 adds Workspace Apps as indexed SwiftData metadata for app manifests whose
+/// canonical definition lives in `<workspace>/.astra/apps/<app-id>/manifest.json`.
+enum ASTRASchemaV7: VersionedSchema {
+    static var versionIdentifier = Schema.Version(7, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [
+            Workspace.self,
+            AgentTask.self,
+            TaskRun.self,
+            TaskEvent.self,
+            Artifact.self,
+            Skill.self,
+            Connector.self,
+            LocalTool.self,
+            TaskTemplate.self,
+            TaskSchedule.self,
+            WorkspaceApp.self
+        ]
+    }
+}
+
 enum ASTRASchema {
     static var current: Schema {
-        Schema(versionedSchema: ASTRASchemaV6.self)
+        Schema(versionedSchema: ASTRASchemaV7.self)
     }
 }
 
@@ -1529,7 +1551,8 @@ enum ASTRAMigrationPlan: SchemaMigrationPlan {
             ASTRASchemaV3.self,
             ASTRASchemaV4.self,
             ASTRASchemaV5.self,
-            ASTRASchemaV6.self
+            ASTRASchemaV6.self,
+            ASTRASchemaV7.self
         ]
     }
 
@@ -1539,7 +1562,8 @@ enum ASTRAMigrationPlan: SchemaMigrationPlan {
             .lightweight(fromVersion: ASTRASchemaV2.self, toVersion: ASTRASchemaV3.self),
             .lightweight(fromVersion: ASTRASchemaV3.self, toVersion: ASTRASchemaV4.self),
             .lightweight(fromVersion: ASTRASchemaV4.self, toVersion: ASTRASchemaV5.self),
-            .lightweight(fromVersion: ASTRASchemaV5.self, toVersion: ASTRASchemaV6.self)
+            .lightweight(fromVersion: ASTRASchemaV5.self, toVersion: ASTRASchemaV6.self),
+            .lightweight(fromVersion: ASTRASchemaV6.self, toVersion: ASTRASchemaV7.self)
         ]
     }
 }

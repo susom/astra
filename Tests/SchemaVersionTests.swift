@@ -37,6 +37,11 @@ struct SchemaVersionTests {
         #expect(ASTRASchemaV6.models.count == 10)
     }
 
+    @Test("SchemaV7 declares Workspace Apps as the eleventh model type")
+    func v7ModelCount() {
+        #expect(ASTRASchemaV7.models.count == 11)
+    }
+
     @Test("SchemaV1 version identifier is 1.0.0")
     func v1VersionIdentifier() {
         #expect(ASTRASchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
@@ -67,14 +72,19 @@ struct SchemaVersionTests {
         #expect(ASTRASchemaV6.versionIdentifier == Schema.Version(6, 0, 0))
     }
 
-    @Test("Migration plan lists SchemaV1 through SchemaV6")
-    func migrationPlanHasVersions() {
-        #expect(ASTRAMigrationPlan.schemas.count == 6)
+    @Test("SchemaV7 version identifier is 7.0.0")
+    func v7VersionIdentifier() {
+        #expect(ASTRASchemaV7.versionIdentifier == Schema.Version(7, 0, 0))
     }
 
-    @Test("Migration plan has V1 to V6 lightweight stages")
+    @Test("Migration plan lists SchemaV1 through SchemaV7")
+    func migrationPlanHasVersions() {
+        #expect(ASTRAMigrationPlan.schemas.count == 7)
+    }
+
+    @Test("Migration plan has V1 to V7 lightweight stages")
     func migrationPlanHasStage() {
-        #expect(ASTRAMigrationPlan.stages.count == 5)
+        #expect(ASTRAMigrationPlan.stages.count == 6)
     }
 
     @Test("ModelContainer can be created with versioned schema")
@@ -85,7 +95,7 @@ struct SchemaVersionTests {
             migrationPlan: ASTRAMigrationPlan.self,
             configurations: [config]
         )
-        #expect(container.schema.entities.count == 10)
+        #expect(container.schema.entities.count == 11)
     }
 
     @MainActor
@@ -160,6 +170,9 @@ struct SchemaVersionTests {
         #expect(tasks[0].events.count == 1)
         #expect(tasks[0].artifacts.count == 1)
         #expect(tasks[0].skills.count == 1)
+
+        let apps = try context.fetch(FetchDescriptor<WorkspaceApp>())
+        #expect(apps.isEmpty)
     }
 
     @MainActor
@@ -395,5 +408,38 @@ struct SchemaVersionTests {
 
         let migratedTask = try #require(try context.fetch(FetchDescriptor<AgentTask>()).first)
         #expect(migratedTask.executionRootPath == nil)
+    }
+
+    @MainActor
+    @Test("SchemaV6 store migrates to SchemaV7 workspace app model")
+    func v6StoreMigratesToWorkspaceAppModel() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("astra-schema-v6-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = root.appendingPathComponent("store.store")
+        var oldContainer: ModelContainer? = try ModelContainer(
+            for: Schema(versionedSchema: ASTRASchemaV6.self),
+            configurations: [ModelConfiguration(url: storeURL)]
+        )
+
+        let oldContext = try #require(oldContainer?.mainContext)
+        let oldWorkspace = Workspace(name: "Legacy V6", primaryPath: "/tmp/legacy-v6")
+        oldContext.insert(oldWorkspace)
+        try oldContext.save()
+        oldContainer = nil
+
+        let migratedContainer = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(url: storeURL)]
+        )
+        let context = migratedContainer.mainContext
+        let workspaces = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(workspaces.count == 1)
+
+        let apps = try context.fetch(FetchDescriptor<WorkspaceApp>())
+        #expect(apps.isEmpty)
     }
 }
