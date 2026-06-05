@@ -36,17 +36,23 @@ enum ContentWorkspaceSelectionResolver {
 enum ContentDetailPresentation: Equatable {
     case draftTask
     case existingTask
+    case workspaceApp
     case newTaskComposer
     case workspaceHome
     case noWorkspace
 
     static func resolve(
         selectedTask: AgentTask?,
+        selectedWorkspaceApp: WorkspaceApp?,
         effectiveWorkspace: Workspace?,
         isComposingTask: Bool
     ) -> ContentDetailPresentation {
         if let selectedTask {
             return selectedTask.status == .draft ? .draftTask : .existingTask
+        }
+
+        if selectedWorkspaceApp != nil {
+            return .workspaceApp
         }
 
         guard let effectiveWorkspace else {
@@ -63,6 +69,7 @@ enum ContentDetailPresentation: Equatable {
 
 struct ContentWorkspaceSelectionUpdate {
     let selectedTask: AgentTask?
+    let selectedWorkspaceApp: WorkspaceApp?
     let selectedWorkspace: Workspace?
     let isComposingTask: Bool
     let shouldPresentRightRail: Bool
@@ -72,6 +79,7 @@ struct ContentWorkspaceSelectionUpdate {
 @MainActor
 struct ContentWorkspaceSelectionCoordinator {
     let selectedTask: AgentTask?
+    let selectedWorkspaceApp: WorkspaceApp?
     let selectedWorkspace: Workspace?
     let isComposingTask: Bool
 
@@ -79,6 +87,7 @@ struct ContentWorkspaceSelectionCoordinator {
         guard let restored else {
             return ContentWorkspaceSelectionUpdate(
                 selectedTask: nil,
+                selectedWorkspaceApp: nil,
                 selectedWorkspace: nil,
                 isComposingTask: false,
                 shouldPresentRightRail: false,
@@ -88,6 +97,7 @@ struct ContentWorkspaceSelectionCoordinator {
 
         return ContentWorkspaceSelectionUpdate(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             selectedWorkspace: restored,
             isComposingTask: isComposingTask,
             shouldPresentRightRail: false,
@@ -98,6 +108,7 @@ struct ContentWorkspaceSelectionCoordinator {
     func open(workspace: Workspace) -> ContentWorkspaceSelectionUpdate {
         ContentWorkspaceSelectionUpdate(
             selectedTask: nil,
+            selectedWorkspaceApp: nil,
             selectedWorkspace: workspace,
             isComposingTask: false,
             shouldPresentRightRail: true,
@@ -108,6 +119,7 @@ struct ContentWorkspaceSelectionCoordinator {
     func open(task: AgentTask) -> ContentWorkspaceSelectionUpdate {
         ContentWorkspaceSelectionUpdate(
             selectedTask: task,
+            selectedWorkspaceApp: nil,
             selectedWorkspace: task.workspace ?? selectedWorkspace,
             isComposingTask: false,
             shouldPresentRightRail: true,
@@ -118,6 +130,7 @@ struct ContentWorkspaceSelectionCoordinator {
     func create(workspace: Workspace) -> ContentWorkspaceSelectionUpdate {
         ContentWorkspaceSelectionUpdate(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             selectedWorkspace: workspace,
             isComposingTask: isComposingTask,
             shouldPresentRightRail: false,
@@ -128,6 +141,7 @@ struct ContentWorkspaceSelectionCoordinator {
     func importWorkspace(_ workspace: Workspace?) -> ContentWorkspaceSelectionUpdate {
         ContentWorkspaceSelectionUpdate(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             selectedWorkspace: workspace ?? selectedWorkspace,
             isComposingTask: isComposingTask,
             shouldPresentRightRail: false,
@@ -141,10 +155,22 @@ struct ContentWorkspaceSelectionCoordinator {
 
         return ContentWorkspaceSelectionUpdate(
             selectedTask: deletedSelectedTaskWorkspace ? nil : selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp?.workspaceID == deleted.id ? nil : selectedWorkspaceApp,
             selectedWorkspace: deletedCurrentWorkspace ? nextWorkspace : selectedWorkspace,
             isComposingTask: deletedSelectedTaskWorkspace ? false : isComposingTask,
             shouldPresentRightRail: false,
             shouldRememberShelfStateWhenPresentingRightRail: true
+        )
+    }
+
+    func open(app: WorkspaceApp, workspace: Workspace) -> ContentWorkspaceSelectionUpdate {
+        ContentWorkspaceSelectionUpdate(
+            selectedTask: nil,
+            selectedWorkspaceApp: app,
+            selectedWorkspace: workspace,
+            isComposingTask: false,
+            shouldPresentRightRail: true,
+            shouldRememberShelfStateWhenPresentingRightRail: false
         )
     }
 }
@@ -194,6 +220,7 @@ struct ContentSceneCoordinator {
     func presentation(isComposingTask: Bool) -> ContentDetailPresentation {
         ContentDetailPresentation.resolve(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: nil,
             effectiveWorkspace: effectiveWorkspace,
             isComposingTask: isComposingTask
         )

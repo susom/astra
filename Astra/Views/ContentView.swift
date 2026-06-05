@@ -231,6 +231,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \Workspace.name) private var workspaces: [Workspace]
     @State private var selectedTask: AgentTask?
+    @State private var selectedWorkspaceApp: WorkspaceApp?
     @State private var selectedWorkspace: Workspace?
     @State private var showingConfigure = false
     @State private var configureInitialTab: ConfigureTab = .capabilities
@@ -607,6 +608,7 @@ struct ContentView: View {
     private var detailArea: some View {
         ContentDetailAreaView(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             effectiveWorkspace: effectiveWorkspace,
             isComposingTask: isComposingTask,
             taskQueue: runtime.taskQueue,
@@ -635,6 +637,7 @@ struct ContentView: View {
             onForkTask: setSelectedTask,
             onCreateTask: startComposingTask,
             onOpenTask: openExistingTask,
+            onOpenApp: openWorkspaceApp,
             onDeleteTask: requestDeleteTask,
             onSetDoneState: setDoneState,
             onRunQueue: runQueue,
@@ -1652,6 +1655,7 @@ struct ContentView: View {
 
     private func startComposingTask() {
         setSelectedTask(nil)
+        selectedWorkspaceApp = nil
         isComposingTask = true
         presentRightRail(rememberShelfState: false)
     }
@@ -1659,6 +1663,7 @@ struct ContentView: View {
     private func handleQuickRunTask(_ task: AgentTask) {
         promoteDraftBrowserSessionIfNeeded(to: task)
         setSelectedTask(task)
+        selectedWorkspaceApp = nil
         isComposingTask = false
         runSingleTask(task)
     }
@@ -1666,6 +1671,7 @@ struct ContentView: View {
     private func handleTaskCreated(_ task: AgentTask) {
         promoteDraftBrowserSessionIfNeeded(to: task)
         setSelectedTask(task)
+        selectedWorkspaceApp = nil
         isComposingTask = false
         presentRightRail(rememberShelfState: false)
     }
@@ -1704,13 +1710,20 @@ struct ContentView: View {
         if selectedTask?.id != task.id {
             setSelectedTask(task)
         }
+        selectedWorkspaceApp = nil
         isComposingTask = false
         presentCanvas(.plan)
     }
 
     private func openExistingTask(_ task: AgentTask) {
         setSelectedTask(task)
+        selectedWorkspaceApp = nil
         isComposingTask = false
+    }
+
+    private func openWorkspaceApp(_ app: WorkspaceApp) {
+        guard let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID }) else { return }
+        applyWorkspaceSelectionUpdate(workspaceSelectionCoordinator.open(app: app, workspace: workspace))
     }
 
     private func handlePendingExternalRoute() {
@@ -1751,6 +1764,7 @@ struct ContentView: View {
 
     private func moveTaskToDraft(_ task: AgentTask) {
         isComposingTask = false
+        selectedWorkspaceApp = nil
         setSelectedTask(nil)
         DispatchQueue.main.async {
             setSelectedTask(task)
@@ -1776,6 +1790,7 @@ struct ContentView: View {
     private var workspaceSelectionCoordinator: ContentWorkspaceSelectionCoordinator {
         ContentWorkspaceSelectionCoordinator(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             selectedWorkspace: selectedWorkspace,
             isComposingTask: isComposingTask
         )
@@ -1958,6 +1973,9 @@ struct ContentView: View {
         if selectedWorkspace?.id != update.selectedWorkspace?.id {
             selectedWorkspace = update.selectedWorkspace
         }
+        if selectedWorkspaceApp?.id != update.selectedWorkspaceApp?.id {
+            selectedWorkspaceApp = update.selectedWorkspaceApp
+        }
         if selectedTask?.id != update.selectedTask?.id {
             setSelectedTask(update.selectedTask)
         } else {
@@ -1977,6 +1995,9 @@ struct ContentView: View {
         let previousTaskID = selectedTask?.id
         if previousTaskID != task?.id {
             setActiveWorkspaceCanvasItem(nil, remember: false)
+        }
+        if task != nil {
+            selectedWorkspaceApp = nil
         }
         if let taskWorkspace = task?.workspace,
            selectedWorkspace?.id != taskWorkspace.id {
@@ -2131,8 +2152,12 @@ struct ContentView: View {
         if selectedTask != nil, taskWorkspaceID != selectedWorkspaceID {
             setSelectedTask(nil)
         }
+        if selectedWorkspaceApp?.workspaceID != selectedWorkspaceID {
+            selectedWorkspaceApp = nil
+        }
         if isUITestingSeededLaunch {
             setSelectedTask(nil)
+            selectedWorkspaceApp = nil
             isComposingTask = selectedWorkspace != nil
         } else {
             isComposingTask = false
@@ -2190,6 +2215,7 @@ struct ContentView: View {
         guard isUITestingSeededLaunch, selectedWorkspace != nil else { return }
 
         setSelectedTask(nil)
+        selectedWorkspaceApp = nil
         isComposingTask = true
     }
 
@@ -2677,6 +2703,7 @@ private struct ContentToolbar: ToolbarContent {
 
 private struct ContentDetailAreaView: View {
     let selectedTask: AgentTask?
+    let selectedWorkspaceApp: WorkspaceApp?
     let effectiveWorkspace: Workspace?
     let isComposingTask: Bool
     let taskQueue: TaskQueue
@@ -2719,6 +2746,7 @@ private struct ContentDetailAreaView: View {
     let onForkTask: (AgentTask) -> Void
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
+    let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3067,6 +3095,7 @@ private struct ContentDetailAreaView: View {
     private var detailContent: some View {
         ContentDetailContentView(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             effectiveWorkspace: effectiveWorkspace,
             isComposingTask: isComposingTask,
             taskQueue: taskQueue,
@@ -3087,6 +3116,7 @@ private struct ContentDetailAreaView: View {
             onForkTask: onForkTask,
             onCreateTask: onCreateTask,
             onOpenTask: onOpenTask,
+            onOpenApp: onOpenApp,
             onDeleteTask: onDeleteTask,
             onSetDoneState: onSetDoneState,
             onRunQueue: onRunQueue,
@@ -3151,6 +3181,7 @@ private struct ContentDetailAreaView: View {
 
 private struct ContentDetailContentView: View {
     let selectedTask: AgentTask?
+    let selectedWorkspaceApp: WorkspaceApp?
     let effectiveWorkspace: Workspace?
     let isComposingTask: Bool
     let taskQueue: TaskQueue
@@ -3171,6 +3202,7 @@ private struct ContentDetailContentView: View {
     let onForkTask: (AgentTask) -> Void
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
+    let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3185,6 +3217,7 @@ private struct ContentDetailContentView: View {
     var body: some View {
         switch ContentDetailPresentation.resolve(
             selectedTask: selectedTask,
+            selectedWorkspaceApp: selectedWorkspaceApp,
             effectiveWorkspace: effectiveWorkspace,
             isComposingTask: isComposingTask
         ) {
@@ -3225,6 +3258,16 @@ private struct ContentDetailContentView: View {
                 )
                 .id(task.id)
             }
+        case .workspaceApp:
+            if let app = selectedWorkspaceApp {
+                WorkspaceAppDetailView(
+                    app: app,
+                    workspace: effectiveWorkspace,
+                    onOpenStudio: {},
+                    onRefresh: {}
+                )
+                .id(app.id)
+            }
         case .newTaskComposer:
             ChatPanelView(
                 taskQueue: taskQueue,
@@ -3244,6 +3287,7 @@ private struct ContentDetailContentView: View {
                     taskQueue: taskQueue,
                     onCreateTask: onCreateTask,
                     onOpenTask: onOpenTask,
+                    onOpenApp: onOpenApp,
                     onDeleteTask: onDeleteTask,
                     onSetDoneState: onSetDoneState,
                     onRunQueue: onRunQueue,

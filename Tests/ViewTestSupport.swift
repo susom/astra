@@ -27,6 +27,29 @@ func makeWorkspace(name: String = "Workspace") -> Workspace {
     Workspace(name: name, primaryPath: "/tmp/\(name)")
 }
 
+func makeWorkspaceApp(
+    workspaceID: UUID = UUID(),
+    logicalID: String = "metrics-app",
+    name: String = "Metrics App",
+    lifecycleStatus: WorkspaceAppLifecycleStatus = .published,
+    permissionMode: WorkspaceAppPermissionMode = .readOnly,
+    dependencyStatus: WorkspaceAppDependencyStatus = .ready
+) -> WorkspaceApp {
+    WorkspaceApp(
+        workspaceID: workspaceID,
+        logicalID: logicalID,
+        name: name,
+        icon: "chart.bar",
+        appDescription: "Shows actionable metrics.",
+        lifecycleStatus: lifecycleStatus,
+        permissionMode: permissionMode,
+        dependencyStatus: dependencyStatus,
+        manifestRelativePath: ".astra/apps/\(logicalID)/manifest.json",
+        appDirectoryRelativePath: ".astra/apps/\(logicalID)",
+        manifestDigest: "digest"
+    )
+}
+
 func makeEvent(
     task: AgentTask,
     type: String,
@@ -139,4 +162,3 @@ final class QueryResultExplanationRecordingGenerator: QueryResultExplanationGene
         return try result.get()
     }
 }
-

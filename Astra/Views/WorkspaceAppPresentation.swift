@@ -15,6 +15,23 @@ struct WorkspaceAppCardPresentation: Identifiable, Equatable {
     var primaryActionTitle: String
 }
 
+struct WorkspaceAppDetailPresentation: Equatable {
+    var id: UUID
+    var logicalID: String
+    var name: String
+    var icon: String
+    var subtitle: String
+    var statusLabel: String
+    var statusSystemImage: String
+    var dependencyLabel: String?
+    var dependencySystemImage: String?
+    var lastActivityLabel: String
+    var permissionLabel: String
+    var surfaceTitle: String
+    var surfaceSubtitle: String
+    var canRunLocalActions: Bool
+}
+
 enum WorkspaceAppsPresentation {
     static let sectionTitle = "Apps"
     static let newAppActionTitle = "New App"
@@ -43,12 +60,31 @@ enum WorkspaceAppsPresentation {
         !apps.isEmpty
     }
 
+    static func detail(for app: WorkspaceApp, now: Date = Date()) -> WorkspaceAppDetailPresentation {
+        WorkspaceAppDetailPresentation(
+            id: app.id,
+            logicalID: app.logicalID,
+            name: normalizedName(for: app),
+            icon: normalizedIcon(for: app),
+            subtitle: subtitle(for: app),
+            statusLabel: statusLabel(for: app.lifecycleStatus),
+            statusSystemImage: statusSystemImage(for: app.lifecycleStatus),
+            dependencyLabel: dependencyLabel(for: app.dependencyStatus),
+            dependencySystemImage: dependencySystemImage(for: app.dependencyStatus),
+            lastActivityLabel: lastActivityLabel(for: app, now: now),
+            permissionLabel: permissionLabel(for: app.permissionMode),
+            surfaceTitle: surfaceTitle(for: app),
+            surfaceSubtitle: surfaceSubtitle(for: app),
+            canRunLocalActions: app.lifecycleStatus != .disabled && app.dependencyStatus == .ready
+        )
+    }
+
     private static func card(for app: WorkspaceApp, now: Date) -> WorkspaceAppCardPresentation {
         WorkspaceAppCardPresentation(
             id: app.id,
             logicalID: app.logicalID,
-            name: app.name,
-            icon: app.icon.isEmpty ? "square.grid.2x2" : app.icon,
+            name: normalizedName(for: app),
+            icon: normalizedIcon(for: app),
             subtitle: subtitle(for: app),
             statusLabel: statusLabel(for: app.lifecycleStatus),
             statusSystemImage: statusSystemImage(for: app.lifecycleStatus),
@@ -57,6 +93,15 @@ enum WorkspaceAppsPresentation {
             lastActivityLabel: lastActivityLabel(for: app, now: now),
             primaryActionTitle: primaryActionTitle(for: app.lifecycleStatus)
         )
+    }
+
+    private static func normalizedName(for app: WorkspaceApp) -> String {
+        let trimmed = app.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? app.logicalID : trimmed
+    }
+
+    private static func normalizedIcon(for app: WorkspaceApp) -> String {
+        app.icon.isEmpty ? "square.grid.2x2" : app.icon
     }
 
     private static func subtitle(for app: WorkspaceApp) -> String {
@@ -126,6 +171,48 @@ enum WorkspaceAppsPresentation {
             "Disabled"
         case .blocked:
             "Review"
+        }
+    }
+
+    private static func permissionLabel(for mode: WorkspaceAppPermissionMode) -> String {
+        switch mode {
+        case .readOnly:
+            "Read only"
+        case .draftOnly:
+            "Draft only"
+        case .approvalRequired:
+            "Approval required"
+        case .preApproved:
+            "Pre-approved"
+        }
+    }
+
+    private static func surfaceTitle(for app: WorkspaceApp) -> String {
+        switch app.lifecycleStatus {
+        case .draft:
+            "Draft app surface"
+        case .published:
+            "App surface"
+        case .disabled:
+            "App disabled"
+        case .blocked:
+            "Review required"
+        }
+    }
+
+    private static func surfaceSubtitle(for app: WorkspaceApp) -> String {
+        if app.dependencyStatus != .ready {
+            return "Resolve dependencies before running live actions."
+        }
+        switch app.permissionMode {
+        case .readOnly:
+            return "This app can read workspace data and show results."
+        case .draftOnly:
+            return "This draft is available for design and review."
+        case .approvalRequired:
+            return "This app asks for approval before running write actions."
+        case .preApproved:
+            return "This app can run pre-approved actions inside its capability contract."
         }
     }
 

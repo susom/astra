@@ -130,4 +130,56 @@ struct WorkspaceHomePresentationTests {
         #expect(cards[1].dependencyLabel == "Needs mapping")
         #expect(cards[1].primaryActionTitle == "Open draft")
     }
+
+    @Test("Workspace app detail presentation exposes status permission and action readiness")
+    func workspaceAppDetailPresentationExposesStatusPermissionAndActionReadiness() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let ready = WorkspaceApp(
+            workspaceID: UUID(),
+            logicalID: "metrics-app",
+            name: "Metrics App",
+            icon: "chart.bar",
+            appDescription: "Shows actionable metrics.",
+            lifecycleStatus: .published,
+            permissionMode: .preApproved,
+            dependencyStatus: .ready,
+            manifestRelativePath: ".astra/apps/metrics-app/manifest.json",
+            appDirectoryRelativePath: ".astra/apps/metrics-app",
+            manifestDigest: "digest",
+            createdAt: now.addingTimeInterval(-86_400),
+            updatedAt: now.addingTimeInterval(-60)
+        )
+        ready.lastOpenedAt = now.addingTimeInterval(-120)
+        let blocked = WorkspaceApp(
+            workspaceID: ready.workspaceID,
+            logicalID: "blocked-app",
+            name: "Blocked App",
+            icon: "",
+            appDescription: "",
+            lifecycleStatus: .blocked,
+            permissionMode: .approvalRequired,
+            dependencyStatus: .missingRequired,
+            manifestRelativePath: ".astra/apps/blocked-app/manifest.json",
+            appDirectoryRelativePath: ".astra/apps/blocked-app",
+            manifestDigest: "digest",
+            createdAt: now.addingTimeInterval(-86_400),
+            updatedAt: now.addingTimeInterval(-60)
+        )
+
+        let readyDetail = WorkspaceAppsPresentation.detail(for: ready, now: now)
+        let blockedDetail = WorkspaceAppsPresentation.detail(for: blocked, now: now)
+
+        #expect(readyDetail.logicalID == "metrics-app")
+        #expect(readyDetail.permissionLabel == "Pre-approved")
+        #expect(readyDetail.surfaceTitle == "App surface")
+        #expect(readyDetail.surfaceSubtitle == "This app can run pre-approved actions inside its capability contract.")
+        #expect(readyDetail.lastActivityLabel == "Opened 2m ago")
+        #expect(readyDetail.canRunLocalActions == true)
+        #expect(blockedDetail.icon == "square.grid.2x2")
+        #expect(blockedDetail.dependencyLabel == "Missing dependency")
+        #expect(blockedDetail.permissionLabel == "Approval required")
+        #expect(blockedDetail.surfaceTitle == "Review required")
+        #expect(blockedDetail.surfaceSubtitle == "Resolve dependencies before running live actions.")
+        #expect(blockedDetail.canRunLocalActions == false)
+    }
 }

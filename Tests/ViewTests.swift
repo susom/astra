@@ -129,6 +129,7 @@ struct ContentSelectionResolverTests {
         let routedWorkspace = makeWorkspace(name: "Routed")
         let coordinator = ContentWorkspaceSelectionCoordinator(
             selectedTask: task,
+            selectedWorkspaceApp: nil,
             selectedWorkspace: staleWorkspace,
             isComposingTask: true
         )
@@ -150,6 +151,7 @@ struct ContentSelectionResolverTests {
         let task = makeTask(workspace: taskWorkspace)
         let coordinator = ContentWorkspaceSelectionCoordinator(
             selectedTask: nil,
+            selectedWorkspaceApp: nil,
             selectedWorkspace: staleWorkspace,
             isComposingTask: true
         )
@@ -170,6 +172,7 @@ struct ContentSelectionResolverTests {
         let task = makeTask(workspace: workspace)
         let coordinator = ContentWorkspaceSelectionCoordinator(
             selectedTask: task,
+            selectedWorkspaceApp: nil,
             selectedWorkspace: workspace,
             isComposingTask: true
         )
@@ -190,6 +193,7 @@ struct ContentSelectionResolverTests {
         let task = makeTask(workspace: deletedWorkspace)
         let coordinator = ContentWorkspaceSelectionCoordinator(
             selectedTask: task,
+            selectedWorkspaceApp: nil,
             selectedWorkspace: deletedWorkspace,
             isComposingTask: true
         )
@@ -200,6 +204,30 @@ struct ContentSelectionResolverTests {
         #expect(update.selectedTask == nil)
         #expect(!update.isComposingTask)
         #expect(!update.shouldPresentRightRail)
+    }
+
+    @Test("Workspace selection coordinator opens app routes through the app workspace")
+    @MainActor
+    func workspaceSelectionCoordinatorOpensAppRoutesThroughWorkspace() {
+        let staleWorkspace = makeWorkspace(name: "Stale")
+        let workspace = makeWorkspace(name: "App Workspace")
+        let task = makeTask(workspace: staleWorkspace)
+        let app = makeWorkspaceApp(workspaceID: workspace.id)
+        let coordinator = ContentWorkspaceSelectionCoordinator(
+            selectedTask: task,
+            selectedWorkspaceApp: nil,
+            selectedWorkspace: staleWorkspace,
+            isComposingTask: true
+        )
+
+        let update = coordinator.open(app: app, workspace: workspace)
+
+        #expect(update.selectedWorkspace?.id == workspace.id)
+        #expect(update.selectedWorkspaceApp?.id == app.id)
+        #expect(update.selectedTask == nil)
+        #expect(!update.isComposingTask)
+        #expect(update.shouldPresentRightRail)
+        #expect(!update.shouldRememberShelfStateWhenPresentingRightRail)
     }
 }
 // MARK: - Content Detail Presentation
@@ -213,6 +241,7 @@ struct ContentDetailPresentationTests {
 
         let presentation = ContentDetailPresentation.resolve(
             selectedTask: nil,
+            selectedWorkspaceApp: nil,
             effectiveWorkspace: workspace,
             isComposingTask: false
         )
@@ -228,6 +257,7 @@ struct ContentDetailPresentationTests {
 
         let presentation = ContentDetailPresentation.resolve(
             selectedTask: nil,
+            selectedWorkspaceApp: nil,
             effectiveWorkspace: workspace,
             isComposingTask: false
         )
@@ -242,6 +272,38 @@ struct ContentDetailPresentationTests {
 
         let presentation = ContentDetailPresentation.resolve(
             selectedTask: task,
+            selectedWorkspaceApp: nil,
+            effectiveWorkspace: workspace,
+            isComposingTask: false
+        )
+
+        #expect(presentation == .existingTask)
+    }
+
+    @Test("Selected workspace apps show app detail when no task is selected")
+    func selectedWorkspaceAppShowsAppDetail() {
+        let workspace = makeWorkspace(name: "GitHub PRs")
+        let app = makeWorkspaceApp(workspaceID: workspace.id)
+
+        let presentation = ContentDetailPresentation.resolve(
+            selectedTask: nil,
+            selectedWorkspaceApp: app,
+            effectiveWorkspace: workspace,
+            isComposingTask: false
+        )
+
+        #expect(presentation == .workspaceApp)
+    }
+
+    @Test("Selected tasks take precedence over selected workspace apps")
+    func selectedTaskTakesPrecedenceOverApp() {
+        let workspace = makeWorkspace(name: "GitHub PRs")
+        let task = makeTask(status: .queued, workspace: workspace)
+        let app = makeWorkspaceApp(workspaceID: workspace.id)
+
+        let presentation = ContentDetailPresentation.resolve(
+            selectedTask: task,
+            selectedWorkspaceApp: app,
             effectiveWorkspace: workspace,
             isComposingTask: false
         )

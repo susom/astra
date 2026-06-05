@@ -261,6 +261,7 @@ struct WorkspaceHomeContainerView: View {
     let taskQueue: TaskQueue
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
+    let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
     var onSetDoneState: ((AgentTask, Bool) -> Void)?
     let onRunQueue: () -> Void
@@ -277,6 +278,7 @@ struct WorkspaceHomeContainerView: View {
         taskQueue: TaskQueue,
         onCreateTask: @escaping () -> Void,
         onOpenTask: @escaping (AgentTask) -> Void,
+        onOpenApp: @escaping (WorkspaceApp) -> Void,
         onDeleteTask: @escaping (AgentTask) -> Void,
         onSetDoneState: ((AgentTask, Bool) -> Void)? = nil,
         onRunQueue: @escaping () -> Void,
@@ -289,6 +291,7 @@ struct WorkspaceHomeContainerView: View {
         self.taskQueue = taskQueue
         self.onCreateTask = onCreateTask
         self.onOpenTask = onOpenTask
+        self.onOpenApp = onOpenApp
         self.onDeleteTask = onDeleteTask
         self.onSetDoneState = onSetDoneState
         self.onRunQueue = onRunQueue
@@ -320,6 +323,7 @@ struct WorkspaceHomeContainerView: View {
             apps: apps,
             onCreateTask: onCreateTask,
             onOpenTask: onOpenTask,
+            onOpenApp: onOpenApp,
             onDeleteTask: onDeleteTask,
             onSetDoneState: onSetDoneState,
             onConfigure: onConfigure,
@@ -336,6 +340,7 @@ struct WorkspaceHomeView: View {
     var apps: [WorkspaceApp] = []
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
+    let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
     var onSetDoneState: ((AgentTask, Bool) -> Void)?
     let onConfigure: () -> Void
@@ -513,7 +518,11 @@ struct WorkspaceHomeView: View {
                 spacing: 12
             ) {
                 ForEach(WorkspaceAppsPresentation.cards(for: apps)) { app in
-                    WorkspaceAppCardView(app: app)
+                    WorkspaceAppCardView(app: app) {
+                        if let selected = apps.first(where: { $0.id == app.id }) {
+                            onOpenApp(selected)
+                        }
+                    }
                 }
             }
         }
@@ -916,58 +925,64 @@ private struct WorkspaceSectionPanelModifier: ViewModifier {
 
 private struct WorkspaceAppCardView: View {
     let app: WorkspaceAppCardPresentation
+    let onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: app.icon)
-                    .font(Stanford.ui(18, weight: .semibold))
-                    .foregroundStyle(Stanford.lagunita)
-                    .frame(width: 26, height: 26)
+        Button(action: onOpen) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: app.icon)
+                        .font(Stanford.ui(18, weight: .semibold))
+                        .foregroundStyle(Stanford.lagunita)
+                        .frame(width: 26, height: 26)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(app.name)
-                        .font(Stanford.ui(14, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(app.name)
+                            .font(Stanford.ui(14, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
 
-                    Text(app.subtitle)
-                        .font(Stanford.caption(12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                        Text(app.subtitle)
+                            .font(Stanford.caption(12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text(app.primaryActionTitle)
+                        .font(Stanford.caption(11).weight(.semibold))
+                        .foregroundStyle(app.primaryActionTitle == "Disabled" ? .secondary : Stanford.lagunita)
                 }
 
-                Spacer(minLength: 8)
-
-                Text(app.primaryActionTitle)
-                    .font(Stanford.caption(11).weight(.semibold))
-                    .foregroundStyle(app.primaryActionTitle == "Disabled" ? .secondary : Stanford.lagunita)
-            }
-
-            HStack(spacing: 8) {
-                WorkspaceAppStatusPill(
-                    label: app.statusLabel,
-                    systemImage: app.statusSystemImage
-                )
-
-                if let dependencyLabel = app.dependencyLabel,
-                   let dependencySystemImage = app.dependencySystemImage {
+                HStack(spacing: 8) {
                     WorkspaceAppStatusPill(
-                        label: dependencyLabel,
-                        systemImage: dependencySystemImage,
-                        isWarning: true
+                        label: app.statusLabel,
+                        systemImage: app.statusSystemImage
                     )
+
+                    if let dependencyLabel = app.dependencyLabel,
+                       let dependencySystemImage = app.dependencySystemImage {
+                        WorkspaceAppStatusPill(
+                            label: dependencyLabel,
+                            systemImage: dependencySystemImage,
+                            isWarning: true
+                        )
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text(app.lastActivityLabel)
+                        .font(Stanford.caption(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-
-                Spacer(minLength: 8)
-
-                Text(app.lastActivityLabel)
-                    .font(Stanford.caption(11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("WorkspaceAppCard-\(app.logicalID)")
+        .accessibilityLabel("Open \(app.name)")
         .padding(12)
         .frame(maxWidth: .infinity, minHeight: WorkspaceAppsPresentation.cardMinHeight, alignment: .leading)
         .background(
@@ -981,7 +996,7 @@ private struct WorkspaceAppCardView: View {
     }
 }
 
-private struct WorkspaceAppStatusPill: View {
+struct WorkspaceAppStatusPill: View {
     let label: String
     let systemImage: String
     var isWarning = false
