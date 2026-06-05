@@ -182,4 +182,46 @@ struct WorkspaceHomePresentationTests {
         #expect(blockedDetail.surfaceSubtitle == "Resolve dependencies before running live actions.")
         #expect(blockedDetail.canRunLocalActions == false)
     }
+
+    @Test("Workspace app detail actions enable safe storage queries and gate record input actions")
+    func workspaceAppDetailActionsEnableSafeStorageQueriesAndGateInputActions() {
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "grocery", name: "Grocery"),
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "items", columns: [
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true),
+                    WorkspaceAppStorageColumn(name: "name", type: "text")
+                ])
+            ]),
+            actions: [
+                WorkspaceAppActionSpec(id: "listItems", type: "appStorage.query", label: "List Items"),
+                WorkspaceAppActionSpec(id: "addItem", type: "appStorage.insert", label: "Add Item"),
+                WorkspaceAppActionSpec(id: "submit", type: "capability.write", label: "Submit")
+            ]
+        )
+        let storageTables = [
+            WorkspaceAppStorageTableSnapshot(
+                name: "items",
+                columns: ["id", "name"],
+                rows: [],
+                errorMessage: nil
+            )
+        ]
+
+        let actions = WorkspaceAppDetailActionsPresentation.actions(
+            manifest: manifest,
+            storageTables: storageTables
+        )
+
+        #expect(actions.count == 3)
+        #expect(actions[0].id == "listItems")
+        #expect(actions[0].isEnabled)
+        #expect(actions[0].input.table == "items")
+        #expect(actions[1].id == "addItem")
+        #expect(!actions[1].isEnabled)
+        #expect(actions[1].disabledReason == "This action needs record input before it can run.")
+        #expect(actions[2].id == "submit")
+        #expect(!actions[2].isEnabled)
+        #expect(actions[2].disabledReason == "This action type is not wired into the app renderer yet.")
+    }
 }

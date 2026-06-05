@@ -5,8 +5,10 @@ struct WorkspaceAppDetailView: View {
     let workspace: Workspace?
     let onOpenStudio: () -> Void
     let onRefresh: () -> Void
+    let onRunAction: (WorkspaceAppActionSpec, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
 
     @State private var dataSnapshot = WorkspaceAppDetailDataSnapshot.empty
+    @State private var actionStatusMessage = ""
 
     private var presentation: WorkspaceAppDetailPresentation {
         WorkspaceAppsPresentation.detail(for: app)
@@ -21,6 +23,7 @@ struct WorkspaceAppDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     appSurface
+                    actionsSection
                     storageSection
                     metadataRows
                 }
@@ -134,6 +137,48 @@ struct WorkspaceAppDetailView: View {
     }
 
     @ViewBuilder
+    private var actionsSection: some View {
+        let actions = WorkspaceAppDetailActionsPresentation.actions(
+            manifest: dataSnapshot.manifest,
+            storageTables: dataSnapshot.storageTables
+        )
+        if !actions.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Actions")
+                        .font(Stanford.ui(15, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    Text("\(actions.count)")
+                        .font(Stanford.caption(11).weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 210, maximum: 320), spacing: 10, alignment: .top)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    ForEach(actions) { action in
+                        WorkspaceAppActionButton(
+                            action: action,
+                            onRun: { runAction(action) }
+                        )
+                    }
+                }
+
+                if !actionStatusMessage.isEmpty {
+                    Text(actionStatusMessage)
+                        .font(Stanford.caption(12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var storageSection: some View {
         if let errorMessage = dataSnapshot.errorMessage {
             WorkspaceAppDetailNotice(
@@ -164,6 +209,60 @@ struct WorkspaceAppDetailView: View {
 
     private func loadDataSnapshot() {
         dataSnapshot = WorkspaceAppDetailDataLoader().load(app: app, workspace: workspace)
+    }
+
+    private func runAction(_ action: WorkspaceAppDetailActionPresentation) {
+        guard let manifest = dataSnapshot.manifest,
+              let actionSpec = manifest.actions.first(where: { $0.id == action.id }) else {
+            actionStatusMessage = "Action is unavailable."
+            return
+        }
+
+        do {
+            let result = try onRunAction(actionSpec, manifest, action.input)
+            actionStatusMessage = result.outputSummary
+            loadDataSnapshot()
+        } catch {
+            actionStatusMessage = String(describing: error)
+        }
+    }
+}
+
+private struct WorkspaceAppActionButton: View {
+    let action: WorkspaceAppDetailActionPresentation
+    let onRun: () -> Void
+
+    var body: some View {
+        Button(action: onRun) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "play.circle")
+                        .font(Stanford.ui(14, weight: .semibold))
+                    Text(action.label)
+                        .font(Stanford.ui(13, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+
+                Text(action.disabledReason ?? action.type)
+                    .font(Stanford.caption(11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .foregroundStyle(action.isEnabled ? Stanford.lagunita : .secondary)
+            .padding(12)
+            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
+            .background(Color.primary.opacity(action.isEnabled ? 0.025 : 0.015))
+            .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                    .stroke(Color.primary.opacity(action.isEnabled ? 0.08 : 0.04), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!action.isEnabled)
+        .help(action.disabledReason ?? "Run \(action.label)")
     }
 }
 

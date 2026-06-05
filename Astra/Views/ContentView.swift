@@ -641,6 +641,7 @@ struct ContentView: View {
             onOpenTask: openExistingTask,
             onOpenApp: openWorkspaceApp,
             onRefreshApp: refreshWorkspaceApp,
+            onRunAppAction: runWorkspaceAppAction,
             onDeleteTask: requestDeleteTask,
             onSetDoneState: setDoneState,
             onRunQueue: runQueue,
@@ -1744,6 +1745,25 @@ struct ContentView: View {
         }
     }
 
+    private func runWorkspaceAppAction(
+        _ action: WorkspaceAppActionSpec,
+        app: WorkspaceApp,
+        manifest: WorkspaceAppManifest,
+        input: WorkspaceAppActionInput
+    ) throws -> WorkspaceAppActionExecutionResult {
+        guard let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID }) else {
+            throw WorkspaceAppActionExecutionError.storageFailed("Workspace is unavailable.")
+        }
+        return try WorkspaceAppActionExecutor().execute(
+            actionID: action.id,
+            app: app,
+            workspace: workspace,
+            manifest: manifest,
+            input: input,
+            modelContext: modelContext
+        )
+    }
+
     private func recordWorkspaceAppOpened(_ app: WorkspaceApp, workspace: Workspace?) {
         do {
             try WorkspaceAppService().openApp(app, in: workspace, modelContext: modelContext)
@@ -2779,6 +2799,7 @@ private struct ContentDetailAreaView: View {
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onRefreshApp: (WorkspaceApp) -> Void
+    let onRunAppAction: (WorkspaceAppActionSpec, WorkspaceApp, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3150,6 +3171,7 @@ private struct ContentDetailAreaView: View {
             onOpenTask: onOpenTask,
             onOpenApp: onOpenApp,
             onRefreshApp: onRefreshApp,
+            onRunAppAction: onRunAppAction,
             onDeleteTask: onDeleteTask,
             onSetDoneState: onSetDoneState,
             onRunQueue: onRunQueue,
@@ -3237,6 +3259,7 @@ private struct ContentDetailContentView: View {
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onRefreshApp: (WorkspaceApp) -> Void
+    let onRunAppAction: (WorkspaceAppActionSpec, WorkspaceApp, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3298,7 +3321,10 @@ private struct ContentDetailContentView: View {
                     app: app,
                     workspace: effectiveWorkspace,
                     onOpenStudio: {},
-                    onRefresh: { onRefreshApp(app) }
+                    onRefresh: { onRefreshApp(app) },
+                    onRunAction: { action, manifest, input in
+                        try onRunAppAction(action, app, manifest, input)
+                    }
                 )
                 .id(app.id)
             }

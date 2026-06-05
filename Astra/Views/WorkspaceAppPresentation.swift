@@ -32,6 +32,75 @@ struct WorkspaceAppDetailPresentation: Equatable {
     var canRunLocalActions: Bool
 }
 
+struct WorkspaceAppDetailActionPresentation: Identifiable, Equatable {
+    var id: String
+    var label: String
+    var type: String
+    var isEnabled: Bool
+    var disabledReason: String?
+    var input: WorkspaceAppActionInput
+}
+
+enum WorkspaceAppDetailActionsPresentation {
+    static func actions(
+        manifest: WorkspaceAppManifest?,
+        storageTables: [WorkspaceAppStorageTableSnapshot]
+    ) -> [WorkspaceAppDetailActionPresentation] {
+        guard let manifest else { return [] }
+        return manifest.actions.map { action in
+            presentation(for: action, storageTables: storageTables)
+        }
+    }
+
+    private static func presentation(
+        for action: WorkspaceAppActionSpec,
+        storageTables: [WorkspaceAppStorageTableSnapshot]
+    ) -> WorkspaceAppDetailActionPresentation {
+        let label = action.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch action.type {
+        case "appStorage.query":
+            guard let table = storageTables.first?.name else {
+                return WorkspaceAppDetailActionPresentation(
+                    id: action.id,
+                    label: label?.isEmpty == false ? label! : action.id,
+                    type: action.type,
+                    isEnabled: false,
+                    disabledReason: "No app storage table is available.",
+                    input: WorkspaceAppActionInput()
+                )
+            }
+            return WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: label?.isEmpty == false ? label! : action.id,
+                type: action.type,
+                isEnabled: true,
+                disabledReason: nil,
+                input: WorkspaceAppActionInput(table: table)
+            )
+
+        case "appStorage.insert", "appStorage.update", "appStorage.delete":
+            return WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: label?.isEmpty == false ? label! : action.id,
+                type: action.type,
+                isEnabled: false,
+                disabledReason: "This action needs record input before it can run.",
+                input: WorkspaceAppActionInput()
+            )
+
+        default:
+            return WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: label?.isEmpty == false ? label! : action.id,
+                type: action.type,
+                isEnabled: false,
+                disabledReason: "This action type is not wired into the app renderer yet.",
+                input: WorkspaceAppActionInput()
+            )
+        }
+    }
+}
+
 enum WorkspaceAppsPresentation {
     static let sectionTitle = "Apps"
     static let newAppActionTitle = "New App"
