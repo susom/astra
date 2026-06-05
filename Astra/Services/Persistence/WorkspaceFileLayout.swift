@@ -51,7 +51,7 @@ enum WorkspaceFileLayout {
     }
 
     static func appDatabaseFile(workspacePath: String, appID: String) -> String {
-        let directory = appDirectory(workspacePath: workspacePath, appID: appID)
+        let directory = appDataDirectory(workspacePath: workspacePath, appID: appID)
         guard !directory.isEmpty else { return "" }
         return (directory as NSString).appendingPathComponent("app.sqlite")
     }

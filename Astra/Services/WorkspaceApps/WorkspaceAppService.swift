@@ -37,7 +37,10 @@ struct WorkspaceAppService {
         manifest: WorkspaceAppManifest,
         in workspace: Workspace,
         modelContext: ModelContext,
-        status: WorkspaceAppLifecycleStatus = .draft
+        status: WorkspaceAppLifecycleStatus = .draft,
+        sourcePackageID: String? = nil,
+        sourcePackageVersion: String? = nil,
+        sourcePackageDigest: String? = nil
     ) throws -> WorkspaceAppCreationResult {
         let report = WorkspaceAppManifestValidator.validate(manifest)
         guard report.isValid else {
@@ -81,6 +84,9 @@ struct WorkspaceAppService {
             manifestRelativePath: WorkspaceFileLayout.relativeAppManifestFile(appID: appID),
             appDirectoryRelativePath: WorkspaceFileLayout.relativeAppDirectory(appID: appID),
             manifestDigest: Self.digest(for: manifestData),
+            sourcePackageID: sourcePackageID,
+            sourcePackageVersion: sourcePackageVersion,
+            sourcePackageDigest: sourcePackageDigest,
             createdAt: now,
             updatedAt: now
         )
