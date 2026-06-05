@@ -377,6 +377,66 @@ struct SidebarGroupingTests {
         #expect(visible.map(\.id) == [starredBeta.id, starredZoo.id, regularAlpha.id])
     }
 
+    @Test("Workspace sidebar filter keeps workspace visible when only an app matches")
+    func workspaceSidebarFilterKeepsWorkspaceVisibleForMatchingApps() {
+        let workspace = makeWorkspace(name: "Clinical")
+        let other = makeWorkspace(name: "Finance")
+
+        let visible = WorkspaceSidebarFilter.visibleWorkspaces(
+            [other, workspace],
+            showStarredOnly: false,
+            searchText: "redcap",
+            workspaceMatchesSearch: { _ in false },
+            hasMatchingTasks: { _ in false },
+            hasMatchingApps: { $0.id == workspace.id }
+        )
+
+        #expect(visible.map(\.id) == [workspace.id])
+    }
+
+    @Test("Sidebar workspace apps sort by activity and expose dependency state")
+    func sidebarWorkspaceAppsSortByActivityAndExposeDependencyState() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = makeWorkspace(name: "Clinical")
+        let otherWorkspace = makeWorkspace(name: "Other")
+        let older = makeWorkspaceApp(
+            workspaceID: workspace.id,
+            logicalID: "grocery",
+            name: "Grocery Tracker",
+            dependencyStatus: .ready
+        )
+        older.updatedAt = now.addingTimeInterval(-600)
+        let recent = makeWorkspaceApp(
+            workspaceID: workspace.id,
+            logicalID: "redcap-check",
+            name: "REDCap Reconciliation",
+            dependencyStatus: .missingRequired
+        )
+        recent.updatedAt = now.addingTimeInterval(-60)
+        let other = makeWorkspaceApp(workspaceID: otherWorkspace.id, logicalID: "other", name: "Other App")
+
+        let apps = SidebarWorkspaceAppList.apps(
+            for: workspace,
+            apps: [older, other, recent],
+            searchText: "",
+            workspaceMatchesSearch: false
+        )
+        let matching = SidebarWorkspaceAppList.apps(
+            for: workspace,
+            apps: [older, recent],
+            searchText: "grocery",
+            workspaceMatchesSearch: false
+        )
+        let presentation = SidebarWorkspaceAppList.presentation(for: recent)
+
+        #expect(apps.map(\.logicalID) == ["redcap-check", "grocery"])
+        #expect(matching.map(\.logicalID) == ["grocery"])
+        #expect(SidebarWorkspaceAppList.hasAnyApp(in: workspace, apps: [other, older]) == true)
+        #expect(presentation.icon == "chart.bar")
+        #expect(presentation.dependencyLabel == "Missing dependency")
+        #expect(presentation.dependencySystemImage == "exclamationmark.triangle")
+    }
+
     @Test("Collapsed selected workspace is not force-expanded on selection change")
     func collapsedSelectedWorkspaceDoesNotAutoExpand() {
         let workspaceID = UUID()
@@ -405,6 +465,9 @@ struct SidebarGroupingTests {
         #expect(SidebarLeanPresentation.workspaceMetadataAndActionsShareTrailingSlot)
         #expect(SidebarLeanPresentation.selectedWorkspaceChildrenUseGuide)
         #expect(SidebarLeanPresentation.sidebarTaskStatusesShowExceptionsOnly)
+        #expect(SidebarLeanPresentation.workspaceAppsAppearBeforeTasks)
+        #expect(SidebarLeanPresentation.workspaceAppRowsUseAppIcon)
+        #expect(SidebarLeanPresentation.workspaceAppMenuIncludesShareActions)
         #expect(SidebarLeanPresentation.pinnedPreviewLimit == 5)
     }
 

@@ -559,10 +559,12 @@ struct ContentView: View {
     private var sidebarArea: some View {
         TaskSidebarContainerView(
             selectedTask: selectedTaskBinding,
+            selectedWorkspaceApp: $selectedWorkspaceApp,
             taskQueue: runtime.taskQueue,
             workspaces: workspaces,
             selectedWorkspace: $selectedWorkspace,
             onNewTask: startComposingTask,
+            onOpenApp: openWorkspaceApp,
             onRunQueue: runQueue,
             onRunTask: runSingleTask,
             onToggleDone: toggleDone,

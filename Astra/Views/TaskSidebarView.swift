@@ -3,12 +3,15 @@ import SwiftData
 
 struct TaskSidebarContainerView: View {
     @Query(sort: \AgentTask.queuePosition) private var tasks: [AgentTask]
+    @Query(sort: \WorkspaceApp.updatedAt, order: .reverse) private var apps: [WorkspaceApp]
 
     @Binding var selectedTask: AgentTask?
+    @Binding var selectedWorkspaceApp: WorkspaceApp?
     let taskQueue: TaskQueue
     let workspaces: [Workspace]
     @Binding var selectedWorkspace: Workspace?
     let onNewTask: () -> Void
+    let onOpenApp: (WorkspaceApp) -> Void
     let onRunQueue: () -> Void
     let onRunTask: (AgentTask) -> Void
     var onToggleDone: ((AgentTask) -> Void)?
@@ -21,6 +24,10 @@ struct TaskSidebarContainerView: View {
     var onShowConfigure: (() -> Void)?
     var onDeleteWorkspace: ((Workspace) -> Void)?
     var onRenameWorkspace: ((Workspace) -> Void)?
+    var onOpenAppStudio: ((WorkspaceApp) -> Void)?
+    var onDuplicateApp: ((WorkspaceApp) -> Void)?
+    var onExportApp: ((WorkspaceApp) -> Void)?
+    var onDeleteApp: ((WorkspaceApp) -> Void)?
     var onNewSchedule: (() -> Void)?
     var onEditSchedule: ((TaskSchedule) -> Void)?
     @Binding var isSearchActive: Bool
@@ -28,11 +35,14 @@ struct TaskSidebarContainerView: View {
     var body: some View {
         TaskSidebarView(
             tasks: tasks,
+            apps: apps,
             selectedTask: $selectedTask,
+            selectedWorkspaceApp: $selectedWorkspaceApp,
             taskQueue: taskQueue,
             workspaces: workspaces,
             selectedWorkspace: $selectedWorkspace,
             onNewTask: onNewTask,
+            onOpenApp: onOpenApp,
             onRunQueue: onRunQueue,
             onRunTask: onRunTask,
             onToggleDone: onToggleDone,
@@ -45,6 +55,10 @@ struct TaskSidebarContainerView: View {
             onShowConfigure: onShowConfigure,
             onDeleteWorkspace: onDeleteWorkspace,
             onRenameWorkspace: onRenameWorkspace,
+            onOpenAppStudio: onOpenAppStudio,
+            onDuplicateApp: onDuplicateApp,
+            onExportApp: onExportApp,
+            onDeleteApp: onDeleteApp,
             onNewSchedule: onNewSchedule,
             onEditSchedule: onEditSchedule,
             isSearchActive: $isSearchActive
@@ -58,7 +72,8 @@ enum WorkspaceSidebarFilter {
         showStarredOnly: Bool,
         searchText: String,
         workspaceMatchesSearch: (Workspace) -> Bool,
-        hasMatchingTasks: (Workspace) -> Bool
+        hasMatchingTasks: (Workspace) -> Bool,
+        hasMatchingApps: (Workspace) -> Bool = { _ in false }
     ) -> [Workspace] {
         let sorted = workspaces.sorted {
             if $0.isStarred != $1.isStarred {
@@ -70,7 +85,7 @@ enum WorkspaceSidebarFilter {
         guard !searchText.isEmpty else { return filteredByStar }
 
         return filteredByStar.filter { workspace in
-            workspaceMatchesSearch(workspace) || hasMatchingTasks(workspace)
+            workspaceMatchesSearch(workspace) || hasMatchingTasks(workspace) || hasMatchingApps(workspace)
         }
     }
 }
@@ -94,6 +109,9 @@ enum SidebarLeanPresentation {
     static let workspaceMetadataAndActionsShareTrailingSlot = true
     static let selectedWorkspaceChildrenUseGuide = true
     static let sidebarTaskStatusesShowExceptionsOnly = true
+    static let workspaceAppsAppearBeforeTasks = true
+    static let workspaceAppRowsUseAppIcon = true
+    static let workspaceAppMenuIncludesShareActions = true
     static let pinnedPreviewLimit = 5
     static let childTaskContentLeadingPadding: CGFloat = 2
     static let childGuideLeadingPadding: CGFloat = 17
@@ -208,13 +226,75 @@ enum SidebarWorkspaceTaskList {
     }
 }
 
+struct SidebarWorkspaceAppPresentation: Identifiable, Equatable {
+    var id: UUID
+    var logicalID: String
+    var name: String
+    var icon: String
+    var subtitle: String
+    var dependencyLabel: String?
+    var dependencySystemImage: String?
+}
+
+enum SidebarWorkspaceAppList {
+    static func apps(
+        for workspace: Workspace,
+        apps: [WorkspaceApp],
+        searchText: String,
+        workspaceMatchesSearch: Bool
+    ) -> [WorkspaceApp] {
+        let workspaceApps = apps
+            .filter { $0.workspaceID == workspace.id }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+
+        guard !searchText.isEmpty, !workspaceMatchesSearch else {
+            return workspaceApps
+        }
+
+        return workspaceApps.filter { app in
+            appMatchesSearch(app, searchText: searchText)
+        }
+    }
+
+    static func hasAnyApp(in workspace: Workspace, apps: [WorkspaceApp]) -> Bool {
+        apps.contains { $0.workspaceID == workspace.id }
+    }
+
+    static func presentation(for app: WorkspaceApp) -> SidebarWorkspaceAppPresentation {
+        let detail = WorkspaceAppsPresentation.detail(for: app)
+        return SidebarWorkspaceAppPresentation(
+            id: detail.id,
+            logicalID: detail.logicalID,
+            name: detail.name,
+            icon: detail.icon,
+            subtitle: detail.subtitle,
+            dependencyLabel: detail.dependencyLabel,
+            dependencySystemImage: detail.dependencySystemImage
+        )
+    }
+
+    static func appMatchesSearch(_ app: WorkspaceApp, searchText: String) -> Bool {
+        app.name.localizedCaseInsensitiveContains(searchText) ||
+            app.logicalID.localizedCaseInsensitiveContains(searchText) ||
+            app.appDescription.localizedCaseInsensitiveContains(searchText)
+    }
+}
+
 struct TaskSidebarView: View {
     let tasks: [AgentTask]
+    let apps: [WorkspaceApp]
     @Binding var selectedTask: AgentTask?
+    @Binding var selectedWorkspaceApp: WorkspaceApp?
     let taskQueue: TaskQueue
     let workspaces: [Workspace]
     @Binding var selectedWorkspace: Workspace?
     let onNewTask: () -> Void
+    let onOpenApp: (WorkspaceApp) -> Void
     let onRunQueue: () -> Void
     let onRunTask: (AgentTask) -> Void
     var onToggleDone: ((AgentTask) -> Void)?
@@ -227,6 +307,10 @@ struct TaskSidebarView: View {
     var onShowConfigure: (() -> Void)?
     var onDeleteWorkspace: ((Workspace) -> Void)?
     var onRenameWorkspace: ((Workspace) -> Void)?
+    var onOpenAppStudio: ((WorkspaceApp) -> Void)?
+    var onDuplicateApp: ((WorkspaceApp) -> Void)?
+    var onExportApp: ((WorkspaceApp) -> Void)?
+    var onDeleteApp: ((WorkspaceApp) -> Void)?
     var onNewSchedule: (() -> Void)?
     var onEditSchedule: ((TaskSchedule) -> Void)?
     @Binding var isSearchActive: Bool
@@ -559,6 +643,7 @@ struct TaskSidebarView: View {
         // between them no longer toggles the state.
         return ZStack(alignment: .trailing) {
             Button {
+                selectedWorkspaceApp = nil
                 selectedTask = task
             } label: {
                 SidebarThreadRow(
@@ -652,6 +737,7 @@ struct TaskSidebarView: View {
 
         return ZStack(alignment: .trailing) {
             Button {
+                selectedWorkspaceApp = nil
                 selectedTask = task
             } label: {
                 SidebarThreadRow(
@@ -840,14 +926,21 @@ struct TaskSidebarView: View {
             workspaces,
             showStarredOnly: showStarredWorkspacesOnly,
             searchText: searchText,
-            workspaceMatchesSearch: workspaceMatchesSearch
-        ) { workspace in
-            taskIndex.reviewTasks(
-                for: workspace,
-                matchingSearch: true,
-                workspaceMatchesSearch: false
-            ).isEmpty == false
-        }
+            workspaceMatchesSearch: workspaceMatchesSearch,
+            hasMatchingTasks: { workspace in
+                !taskIndex.reviewTasks(
+                    for: workspace,
+                    matchingSearch: true,
+                    workspaceMatchesSearch: false
+                ).isEmpty
+            },
+            hasMatchingApps: { workspace in
+                !workspaceApps(
+                    for: workspace,
+                    matchingSearch: true
+                ).isEmpty
+            }
+        )
     }
 
     private func workspaceSection(using taskIndex: SidebarTaskIndex) -> some View {
@@ -967,9 +1060,10 @@ struct TaskSidebarView: View {
     @ViewBuilder
     private func workspaceListRow(for workspace: Workspace, using taskIndex: SidebarTaskIndex) -> some View {
         let isExpanded = isWorkspaceExpanded(workspace, using: taskIndex)
+        let workspaceApps = workspaceApps(for: workspace, matchingSearch: !searchText.isEmpty)
         let workspaceTasks = tasksForWorkspace(workspace, using: taskIndex)
         let hasTasks = !workspaceTasks.isEmpty
-        let hasAny = hasAnyTask(in: workspace, using: taskIndex)
+        let hasAny = hasAnyTask(in: workspace, using: taskIndex) || hasAnyApp(in: workspace)
         let isShowingAll = expandedWorkspaceTaskLists.contains(workspace.id)
         let visibleTasks = SidebarWorkspaceTaskList.visibleTasks(workspaceTasks, isShowingAll: isShowingAll)
         let hiddenTaskCount = SidebarWorkspaceTaskList.hiddenTaskCount(
@@ -982,25 +1076,31 @@ struct TaskSidebarView: View {
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 2) {
-                    if !hasTasks && !hasAny {
+                    if !hasAny {
                         emptyWorkspaceRow(for: workspace)
-                    } else if hasTasks {
-                        ForEach(visibleTasks) { task in
-                            compactTaskRow(
-                                for: task,
-                                contentLeadingPadding: SidebarLeanPresentation.childTaskContentLeadingPadding
-                            )
+                    } else {
+                        ForEach(workspaceApps) { app in
+                            compactAppRow(for: app)
                         }
-                        if hiddenTaskCount > 0 {
-                            sidebarShowMoreButton(
-                                title: "Show \(hiddenTaskCount) more",
-                                action: {
-                                    withAnimation(disclosureAnimation) {
-                                        _ = expandedWorkspaceTaskLists.insert(workspace.id)
+
+                        if hasTasks {
+                            ForEach(visibleTasks) { task in
+                                compactTaskRow(
+                                    for: task,
+                                    contentLeadingPadding: SidebarLeanPresentation.childTaskContentLeadingPadding
+                                )
+                            }
+                            if hiddenTaskCount > 0 {
+                                sidebarShowMoreButton(
+                                    title: "Show \(hiddenTaskCount) more",
+                                    action: {
+                                        withAnimation(disclosureAnimation) {
+                                            _ = expandedWorkspaceTaskLists.insert(workspace.id)
+                                        }
                                     }
-                                }
-                            )
-                            .padding(.leading, 2)
+                                )
+                                .padding(.leading, 2)
+                            }
                         }
                     }
                 }
@@ -1045,6 +1145,7 @@ struct TaskSidebarView: View {
 
     @State private var hoveredWorkspaceID: UUID?
     @State private var hoveredTaskID: UUID?
+    @State private var hoveredAppID: UUID?
 
     private var workspaceEmptyTitle: String {
         if showStarredWorkspacesOnly {
@@ -1063,7 +1164,7 @@ struct TaskSidebarView: View {
     private func workspaceRow(for workspace: Workspace, using taskIndex: SidebarTaskIndex) -> some View {
         let isExpanded = isWorkspaceExpanded(workspace, using: taskIndex)
         let isHovered = hoveredWorkspaceID == workspace.id
-        let isSelected = selectedWorkspace?.id == workspace.id && selectedTask == nil
+        let isSelected = selectedWorkspace?.id == workspace.id && selectedTask == nil && selectedWorkspaceApp == nil
         let workspaceTaskCount = tasksForWorkspace(workspace, using: taskIndex).count
 
         return HStack(alignment: .center, spacing: 7) {
@@ -1203,6 +1304,7 @@ struct TaskSidebarView: View {
 
     private func openWorkspace(_ workspace: Workspace) {
         selectedTask = nil
+        selectedWorkspaceApp = nil
         selectedWorkspace = workspace
         ensureWorkspaceExpanded(workspace)
     }
@@ -1210,6 +1312,7 @@ struct TaskSidebarView: View {
     private func toggleWorkspaceOpenState(_ workspace: Workspace, using taskIndex: SidebarTaskIndex) {
         let wasExpanded = isWorkspaceExpanded(workspace, using: taskIndex)
         selectedTask = nil
+        selectedWorkspaceApp = nil
         selectedWorkspace = workspace
 
         if wasExpanded {
@@ -1251,6 +1354,7 @@ struct TaskSidebarView: View {
     private func emptyWorkspaceRow(for workspace: Workspace) -> some View {
         Button {
             selectedWorkspace = workspace
+            selectedWorkspaceApp = nil
             onNewTask()
         } label: {
             HStack(spacing: 5) {
@@ -1273,6 +1377,34 @@ struct TaskSidebarView: View {
         .buttonStyle(.plain)
     }
 
+    private func compactAppRow(for app: WorkspaceApp) -> some View {
+        let presentation = SidebarWorkspaceAppList.presentation(for: app)
+        let isSelected = selectedWorkspaceApp?.id == app.id && selectedTask == nil
+        let isHovered = hoveredAppID == app.id
+
+        return ZStack(alignment: .trailing) {
+            Button {
+                openApp(app)
+            } label: {
+                SidebarWorkspaceAppRow(
+                    app: presentation,
+                    isSelected: isSelected,
+                    isHovered: isHovered,
+                    contentLeadingPadding: SidebarLeanPresentation.childTaskContentLeadingPadding
+                )
+            }
+            .buttonStyle(.plain)
+
+            appOptionsMenu(for: app, isHovered: isHovered)
+                .padding(.trailing, 8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { hovering in hoveredAppID = hovering ? app.id : nil }
+        .contextMenu {
+            appContextMenu(for: app)
+        }
+    }
+
     private func compactTaskRow(
         for task: AgentTask,
         attemptCount: Int = 1,
@@ -1282,6 +1414,7 @@ struct TaskSidebarView: View {
 
         return ZStack(alignment: .trailing) {
             Button {
+                selectedWorkspaceApp = nil
                 selectedTask = task
             } label: {
                 SidebarThreadRow(
@@ -1374,6 +1507,68 @@ struct TaskSidebarView: View {
         .help("Task options")
     }
 
+    private func appOptionsMenu(for app: WorkspaceApp, isHovered: Bool) -> some View {
+        Menu {
+            appContextMenu(for: app)
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(Stanford.ui(12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(width: 24, height: 24, alignment: .center)
+        .opacity(isHovered ? 1 : 0)
+        .allowsHitTesting(isHovered)
+        .accessibilityHidden(!isHovered)
+        .animation(hoverAnimation, value: isHovered)
+        .help("App options")
+    }
+
+    @ViewBuilder
+    private func appContextMenu(for app: WorkspaceApp) -> some View {
+        Button {
+            openApp(app)
+        } label: {
+            Label("Open App", systemImage: app.icon.isEmpty ? "square.grid.2x2" : app.icon)
+        }
+
+        Button {
+            onOpenAppStudio?(app)
+        } label: {
+            Label("Open in App Studio", systemImage: "slider.horizontal.3")
+        }
+        .disabled(onOpenAppStudio == nil)
+
+        Divider()
+
+        Button {
+            onDuplicateApp?(app)
+        } label: {
+            Label("Duplicate", systemImage: "plus.square.on.square")
+        }
+        .disabled(onDuplicateApp == nil)
+
+        Button {
+            onExportApp?(app)
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+        .disabled(onExportApp == nil)
+
+        Divider()
+
+        Button(role: .destructive) {
+            onDeleteApp?(app)
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+        .disabled(onDeleteApp == nil)
+    }
+
     private func isWorkspaceExpanded(_ workspace: Workspace, using taskIndex: SidebarTaskIndex) -> Bool {
         if collapsedWorkspaceIDs.contains(workspace.id) {
             return false
@@ -1381,7 +1576,10 @@ struct TaskSidebarView: View {
 
         return selectedWorkspace?.id == workspace.id ||
             expandedWorkspaceIDs.contains(workspace.id) ||
-            (!searchText.isEmpty && !tasksForWorkspace(workspace, matchingSearch: true, using: taskIndex).isEmpty)
+            (!searchText.isEmpty && (
+                !tasksForWorkspace(workspace, matchingSearch: true, using: taskIndex).isEmpty ||
+                !workspaceApps(for: workspace, matchingSearch: true).isEmpty
+            ))
     }
 
     private func toggleWorkspaceExpansion(_ workspace: Workspace, using taskIndex: SidebarTaskIndex) {
@@ -1406,6 +1604,29 @@ struct TaskSidebarView: View {
 
     private func hasAnyTask(in workspace: Workspace, using taskIndex: SidebarTaskIndex) -> Bool {
         taskIndex.hasAnyTask(in: workspace)
+    }
+
+    private func workspaceApps(for workspace: Workspace, matchingSearch: Bool = false) -> [WorkspaceApp] {
+        SidebarWorkspaceAppList.apps(
+            for: workspace,
+            apps: apps,
+            searchText: matchingSearch ? searchText : "",
+            workspaceMatchesSearch: workspaceMatchesSearch(workspace)
+        )
+    }
+
+    private func hasAnyApp(in workspace: Workspace) -> Bool {
+        SidebarWorkspaceAppList.hasAnyApp(in: workspace, apps: apps)
+    }
+
+    private func openApp(_ app: WorkspaceApp) {
+        selectedTask = nil
+        selectedWorkspaceApp = app
+        if let workspace = workspaces.first(where: { $0.id == app.workspaceID }) {
+            selectedWorkspace = workspace
+            ensureWorkspaceExpanded(workspace)
+        }
+        onOpenApp(app)
     }
 
     private func workspaceMatchesSearch(_ workspace: Workspace) -> Bool {
@@ -1819,6 +2040,70 @@ private struct SectionAddIcon: View {
             )
             .contentShape(Rectangle())
             .animation(hoverAnimation, value: isHovered)
+    }
+}
+
+private struct SidebarWorkspaceAppRow: View {
+    let app: SidebarWorkspaceAppPresentation
+    let isSelected: Bool
+    let isHovered: Bool
+    var contentLeadingPadding: CGFloat = 12
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: app.icon)
+                .font(Stanford.ui(12, weight: .medium))
+                .foregroundStyle(iconColor)
+                .frame(width: 14, height: 14)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(app.name)
+                    .font(Stanford.ui(13))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                if let dependencyLabel = app.dependencyLabel,
+                   let dependencySystemImage = app.dependencySystemImage {
+                    Label(dependencyLabel, systemImage: dependencySystemImage)
+                        .font(Stanford.caption(10).weight(.medium))
+                        .foregroundStyle(Stanford.statusWarn)
+                        .lineLimit(1)
+                } else {
+                    Text(app.subtitle)
+                        .font(Stanford.caption(10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, contentLeadingPadding)
+        .padding(.trailing, 32)
+        .padding(.vertical, 5)
+        .frame(minHeight: Stanford.sidebarThreadRowHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: Stanford.radiusSmall, style: .continuous)
+                .fill(rowFill)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("App \(app.name)")
+    }
+
+    private var iconColor: Color {
+        if app.dependencyLabel != nil {
+            return Stanford.statusWarn
+        }
+        return isSelected ? Stanford.lagunita : .secondary
+    }
+
+    private var rowFill: Color {
+        if isSelected { return Stanford.selectionFill }
+        if isHovered { return Color.primary.opacity(0.06) }
+        return .clear
     }
 }
 
