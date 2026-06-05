@@ -105,6 +105,48 @@ struct WorkspaceAppService {
         return WorkspaceAppCreationResult(app: app, manifestURL: URL(fileURLWithPath: manifestPath))
     }
 
+    @MainActor
+    func openApp(
+        _ app: WorkspaceApp,
+        in workspace: Workspace?,
+        modelContext: ModelContext,
+        now: Date = Date()
+    ) throws {
+        app.lastOpenedAt = now
+        app.updatedAt = now
+        workspace?.updatedAt = now
+        try modelContext.save()
+        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
+
+        AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+            "resource": "workspace_app",
+            "result": "opened",
+            "app_id": app.logicalID,
+            "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
+        ])
+    }
+
+    @MainActor
+    func refreshApp(
+        _ app: WorkspaceApp,
+        in workspace: Workspace?,
+        modelContext: ModelContext,
+        now: Date = Date()
+    ) throws {
+        app.lastRefreshedAt = now
+        app.updatedAt = now
+        workspace?.updatedAt = now
+        try modelContext.save()
+        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
+
+        AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+            "resource": "workspace_app",
+            "result": "refreshed",
+            "app_id": app.logicalID,
+            "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
+        ])
+    }
+
     nonisolated static func encodeManifest(_ manifest: WorkspaceAppManifest) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

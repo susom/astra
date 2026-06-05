@@ -640,6 +640,7 @@ struct ContentView: View {
             onCreateTask: startComposingTask,
             onOpenTask: openExistingTask,
             onOpenApp: openWorkspaceApp,
+            onRefreshApp: refreshWorkspaceApp,
             onDeleteTask: requestDeleteTask,
             onSetDoneState: setDoneState,
             onRunQueue: runQueue,
@@ -1726,6 +1727,34 @@ struct ContentView: View {
     private func openWorkspaceApp(_ app: WorkspaceApp) {
         guard let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID }) else { return }
         applyWorkspaceSelectionUpdate(workspaceSelectionCoordinator.open(app: app, workspace: workspace))
+        recordWorkspaceAppOpened(app, workspace: workspace)
+    }
+
+    private func refreshWorkspaceApp(_ app: WorkspaceApp) {
+        let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID })
+        do {
+            try WorkspaceAppService().refreshApp(app, in: workspace, modelContext: modelContext)
+        } catch {
+            AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+                "resource": "workspace_app",
+                "result": "refresh_failed",
+                "app_id": app.logicalID,
+                "error_type": String(describing: type(of: error))
+            ], level: .error)
+        }
+    }
+
+    private func recordWorkspaceAppOpened(_ app: WorkspaceApp, workspace: Workspace?) {
+        do {
+            try WorkspaceAppService().openApp(app, in: workspace, modelContext: modelContext)
+        } catch {
+            AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+                "resource": "workspace_app",
+                "result": "open_failed",
+                "app_id": app.logicalID,
+                "error_type": String(describing: type(of: error))
+            ], level: .error)
+        }
     }
 
     private func handlePendingExternalRoute() {
@@ -2749,6 +2778,7 @@ private struct ContentDetailAreaView: View {
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
+    let onRefreshApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3119,6 +3149,7 @@ private struct ContentDetailAreaView: View {
             onCreateTask: onCreateTask,
             onOpenTask: onOpenTask,
             onOpenApp: onOpenApp,
+            onRefreshApp: onRefreshApp,
             onDeleteTask: onDeleteTask,
             onSetDoneState: onSetDoneState,
             onRunQueue: onRunQueue,
@@ -3205,6 +3236,7 @@ private struct ContentDetailContentView: View {
     let onCreateTask: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
+    let onRefreshApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
     let onSetDoneState: (AgentTask, Bool) -> Void
     let onRunQueue: () -> Void
@@ -3266,7 +3298,7 @@ private struct ContentDetailContentView: View {
                     app: app,
                     workspace: effectiveWorkspace,
                     onOpenStudio: {},
-                    onRefresh: {}
+                    onRefresh: { onRefreshApp(app) }
                 )
                 .id(app.id)
             }

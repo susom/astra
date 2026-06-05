@@ -112,6 +112,45 @@ struct WorkspaceAppManifestTests {
         #expect(apps[0].workspaceID == workspace.id)
     }
 
+    @MainActor
+    @Test("service records app open and refresh lifecycle timestamps")
+    func serviceRecordsAppOpenAndRefreshLifecycleTimestamps() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-lifecycle-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let workspace = Workspace(name: "Apps", primaryPath: root.path)
+        context.insert(workspace)
+
+        let service = WorkspaceAppService()
+        let result = try service.createApp(
+            manifest: Self.reconciliationManifest(),
+            in: workspace,
+            modelContext: context
+        )
+        let openedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let refreshedAt = openedAt.addingTimeInterval(120)
+
+        try service.openApp(result.app, in: workspace, modelContext: context, now: openedAt)
+        try service.refreshApp(result.app, in: workspace, modelContext: context, now: refreshedAt)
+
+        #expect(result.app.lastOpenedAt == openedAt)
+        #expect(result.app.lastRefreshedAt == refreshedAt)
+        #expect(result.app.updatedAt == refreshedAt)
+        #expect(workspace.updatedAt >= openedAt)
+
+        let fetched = try #require(try context.fetch(FetchDescriptor<WorkspaceApp>()).first)
+        #expect(fetched.lastOpenedAt == openedAt)
+        #expect(fetched.lastRefreshedAt == refreshedAt)
+    }
+
     static func reconciliationManifest() -> WorkspaceAppManifest {
         WorkspaceAppManifest(
             app: WorkspaceAppManifestMetadata(
