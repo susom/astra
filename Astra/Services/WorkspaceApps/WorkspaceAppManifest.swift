@@ -301,6 +301,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var gateOperator: String?
     var gateValue: WorkspaceAppStorageValue?
     var steps: [String]
+    var maxIterations: Int?
+    var timeoutSeconds: Int?
+    var delaySeconds: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -329,6 +332,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         case gateOperator
         case gateValue
         case steps
+        case maxIterations
+        case timeoutSeconds
+        case delaySeconds
     }
 
     init(
@@ -357,7 +363,10 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         gateField: String? = nil,
         gateOperator: String? = nil,
         gateValue: WorkspaceAppStorageValue? = nil,
-        steps: [String] = []
+        steps: [String] = [],
+        maxIterations: Int? = nil,
+        timeoutSeconds: Int? = nil,
+        delaySeconds: Int? = nil
     ) {
         self.id = id
         self.type = type
@@ -385,6 +394,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.gateOperator = gateOperator
         self.gateValue = gateValue
         self.steps = steps
+        self.maxIterations = maxIterations
+        self.timeoutSeconds = timeoutSeconds
+        self.delaySeconds = delaySeconds
     }
 
     init(from decoder: Decoder) throws {
@@ -415,6 +427,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         gateOperator = try container.decodeIfPresent(String.self, forKey: .gateOperator)
         gateValue = try container.decodeIfPresent(WorkspaceAppStorageValue.self, forKey: .gateValue)
         steps = try container.decodeIfPresent([String].self, forKey: .steps) ?? []
+        maxIterations = try container.decodeIfPresent(Int.self, forKey: .maxIterations)
+        timeoutSeconds = try container.decodeIfPresent(Int.self, forKey: .timeoutSeconds)
+        delaySeconds = try container.decodeIfPresent(Int.self, forKey: .delaySeconds)
     }
 }
 

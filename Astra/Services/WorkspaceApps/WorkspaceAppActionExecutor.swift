@@ -13,6 +13,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingPrimaryKey(String)
     case missingTaskGoal
     case missingPipelineSteps(String)
+    case missingLoopBounds(String)
+    case loopTimeout(String)
     case unsupportedExportFormat(String)
     case invalidUtilityAction(String)
     case approvalRequired(String)
@@ -44,6 +46,10 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app task action requires a task goal."
         case .missingPipelineSteps(let actionID):
             "Workspace app pipeline action '\(actionID)' must declare at least one step."
+        case .missingLoopBounds(let actionID):
+            "Workspace app loop action '\(actionID)' must declare steps, max iterations, timeout, and a stop condition."
+        case .loopTimeout(let actionID):
+            "Workspace app loop action '\(actionID)' exceeded its timeout."
         case .unsupportedExportFormat(let format):
             "Workspace app artifact export format '\(format)' is not supported."
         case .invalidUtilityAction(let message):
@@ -543,6 +549,17 @@ struct WorkspaceAppActionExecutor {
                 run: run,
                 modelContext: modelContext
             )
+        case "loop.run":
+            return try executeLoop(
+                action: action,
+                app: app,
+                workspace: workspace,
+                manifest: manifest,
+                dependencyBindings: dependencyBindings,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
         }
@@ -969,6 +986,121 @@ struct WorkspaceAppActionExecutor {
         )
     }
 
+    private func executeLoop(
+        action: WorkspaceAppActionSpec,
+        app: WorkspaceApp,
+        workspace: Workspace,
+        manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding],
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        guard !action.steps.isEmpty,
+              let maxIterations = action.maxIterations,
+              maxIterations > 0,
+              let timeoutSeconds = action.timeoutSeconds,
+              timeoutSeconds > 0,
+              action.delaySeconds.map({ $0 >= 0 }) ?? true,
+              let stopOperator = WorkspaceAppExpressionGateOperator(
+                rawValue: action.gateOperator?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+              ),
+              let stopField = action.gateField?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !stopField.isEmpty else {
+            throw WorkspaceAppActionExecutionError.missingLoopBounds(action.id)
+        }
+
+        let startedAt = Date()
+        let delaySeconds = action.delaySeconds ?? 0
+        var rows: [[String: WorkspaceAppStorageValue]] = []
+        var summaries: [String] = []
+        var linkedTaskID: UUID?
+        var linkedArtifactPath: String?
+        var completedIterations = 0
+        var stoppedByCondition = false
+
+        for iteration in 1...maxIterations {
+            if Date().timeIntervalSince(startedAt) > TimeInterval(timeoutSeconds) {
+                throw WorkspaceAppActionExecutionError.loopTimeout(action.id)
+            }
+            completedIterations = iteration
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.loop.iteration.started",
+                payload: [
+                    "loopID": .text(action.id),
+                    "iteration": .integer(Int64(iteration)),
+                    "maxIterations": .integer(Int64(maxIterations)),
+                    "timeoutSeconds": .integer(Int64(timeoutSeconds)),
+                    "delaySeconds": .integer(Int64(delaySeconds))
+                ],
+                modelContext: modelContext
+            )
+
+            for stepID in action.steps {
+                let step = try actionSpec(actionID: stepID, manifest: manifest)
+                try enforcePermission(for: step, app: app, input: input)
+                let result = try execute(
+                    action: step,
+                    app: app,
+                    workspace: workspace,
+                    manifest: manifest,
+                    dependencyBindings: dependencyBindings,
+                    input: input,
+                    run: run,
+                    modelContext: modelContext
+                )
+                recorder.recordEvent(
+                    run: run,
+                    type: "workspaceApp.loop.step.completed",
+                    payload: [
+                        "loopID": .text(action.id),
+                        "iteration": .integer(Int64(iteration)),
+                        "stepID": .text(stepID),
+                        "summary": .text(result.outputSummary)
+                    ],
+                    modelContext: modelContext
+                )
+                rows = result.rows
+                summaries.append("iteration \(iteration) \(stepID): \(result.outputSummary)")
+                linkedTaskID = result.linkedTaskID ?? linkedTaskID
+                linkedArtifactPath = result.linkedArtifactPath ?? linkedArtifactPath
+            }
+
+            stoppedByCondition = evaluateExpressionGate(
+                gateOperator: stopOperator,
+                actualValue: input.record[stopField],
+                expectedValue: action.gateValue
+            )
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.loop.iteration.completed",
+                payload: [
+                    "loopID": .text(action.id),
+                    "iteration": .integer(Int64(iteration)),
+                    "stopConditionMet": .bool(stoppedByCondition)
+                ],
+                modelContext: modelContext
+            )
+            if stoppedByCondition {
+                break
+            }
+        }
+
+        let stopSummary = stoppedByCondition ? "stop condition met" : "max iterations reached"
+        return (
+            rows,
+            "Loop '\(action.id)' completed \(completedIterations) iterations; \(stopSummary). " + summaries.joined(separator: " "),
+            linkedTaskID,
+            linkedArtifactPath
+        )
+    }
+
     private func primaryKeyColumn(
         in tableName: String,
         manifest: WorkspaceAppManifest
@@ -1135,7 +1267,7 @@ struct WorkspaceAppActionExecutor {
 
     private func effect(for actionType: String) -> WorkspaceAppContractEffect {
         switch actionType {
-        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run", "gate.humanApproval", "gate.expression":
+        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run", "loop.run", "gate.humanApproval", "gate.expression":
             .read
         case "gate.agentRecommendation":
             .read

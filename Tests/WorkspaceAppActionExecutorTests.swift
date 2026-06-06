@@ -819,6 +819,74 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("loop actions audit bounded iterations and stop conditions")
+    func loopActionsAuditBoundedIterationsAndStopConditions() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        let maxIterationsResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "boundedLoop",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(record: ["status": .text("pending")]),
+            modelContext: fixture.context
+        )
+
+        #expect(maxIterationsResult.run.status == .completed)
+        #expect(maxIterationsResult.outputSummary.contains("Loop 'boundedLoop' completed 3 iterations; max iterations reached."))
+        #expect(maxIterationsResult.outputSummary.contains("iteration 3 listItems: Read 1 records from items."))
+
+        let maxEvents = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == maxIterationsResult.run.id }
+        #expect(maxEvents.filter { $0.type == "workspaceApp.loop.iteration.started" }.count == 3)
+        #expect(maxEvents.filter { $0.type == "workspaceApp.loop.iteration.completed" }.count == 3)
+        #expect(maxEvents.filter { $0.type == "workspaceApp.loop.step.completed" }.count == 3)
+        #expect(maxEvents.contains {
+            $0.type == "workspaceApp.loop.iteration.completed" &&
+                $0.payload.contains("\"iteration\":3") &&
+                $0.payload.contains("\"stopConditionMet\":false")
+        })
+
+        let stoppedResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "boundedLoop",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(record: ["status": .text("done")]),
+            modelContext: fixture.context
+        )
+
+        #expect(stoppedResult.run.status == .completed)
+        #expect(stoppedResult.outputSummary.contains("Loop 'boundedLoop' completed 1 iterations; stop condition met."))
+
+        let stoppedEvents = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == stoppedResult.run.id }
+        #expect(stoppedEvents.filter { $0.type == "workspaceApp.loop.iteration.started" }.count == 1)
+        #expect(stoppedEvents.filter { $0.type == "workspaceApp.loop.step.completed" }.count == 1)
+        #expect(stoppedEvents.contains {
+            $0.type == "workspaceApp.loop.iteration.completed" &&
+                $0.payload.contains("\"iteration\":1") &&
+                $0.payload.contains("\"stopConditionMet\":true")
+        })
+    }
+
+    @MainActor
     @Test("read-only apps block local write actions and record blocked runs")
     func readOnlyAppsBlockLocalWriteActionsAndRecordBlockedRuns() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
@@ -1114,6 +1182,18 @@ struct WorkspaceAppActionExecutorTests {
                     type: "pipeline.run",
                     label: "Agent Pipeline",
                     steps: ["agentGate", "exportItems"]
+                ),
+                WorkspaceAppActionSpec(
+                    id: "boundedLoop",
+                    type: "loop.run",
+                    label: "Bounded Loop",
+                    gateField: "status",
+                    gateOperator: "equals",
+                    gateValue: .text("done"),
+                    steps: ["listItems"],
+                    maxIterations: 3,
+                    timeoutSeconds: 30,
+                    delaySeconds: 0
                 )
             ],
             permissions: WorkspaceAppPermissions(

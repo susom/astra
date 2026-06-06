@@ -416,22 +416,100 @@ enum WorkspaceAppManifestValidator {
             }
         }
 
-        for (index, action) in actions.enumerated() where action.type == "pipeline.run" {
+        for (index, action) in actions.enumerated() where action.type == "pipeline.run" || action.type == "loop.run" {
             let path = "/actions/\(index)"
             if action.steps.isEmpty {
-                issues.append(blocker("\(path)/steps", "Pipeline action must declare at least one step."))
+                issues.append(blocker("\(path)/steps", "\(action.type == "loop.run" ? "Loop" : "Pipeline") action must declare at least one step."))
             }
             for (stepIndex, stepID) in action.steps.enumerated() {
                 let stepPath = "\(path)/steps/\(stepIndex)"
                 validateIdentifier(stepID, path: stepPath, label: "Pipeline step action ID", issues: &issues)
                 if stepID == action.id {
-                    issues.append(blocker(stepPath, "Pipeline action cannot include itself as a step."))
+                    issues.append(blocker(stepPath, "\(action.type == "loop.run" ? "Loop" : "Pipeline") action cannot include itself as a step."))
                 } else if !actionIDs.contains(stepID) {
-                    issues.append(blocker(stepPath, "Pipeline step references unknown action '\(stepID)'."))
+                    issues.append(blocker(stepPath, "\(action.type == "loop.run" ? "Loop" : "Pipeline") step references unknown action '\(stepID)'."))
+                }
+            }
+            if action.type == "loop.run" {
+                validateLoopAction(action, path: path, issues: &issues)
+            }
+        }
+        validateCompositeActionCycles(actions, issues: &issues)
+        return actionIDs
+    }
+
+    private static func validateCompositeActionCycles(
+        _ actions: [WorkspaceAppActionSpec],
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        let actionsByID = Dictionary(uniqueKeysWithValues: actions.map { ($0.id, $0) })
+        let actionIndexes = Dictionary(uniqueKeysWithValues: actions.enumerated().map { ($0.element.id, $0.offset) })
+
+        for action in actions where isCompositeAction(action) {
+            guard let actionIndex = actionIndexes[action.id] else { continue }
+            for (stepIndex, stepID) in action.steps.enumerated() where stepID != action.id {
+                if compositeAction(stepID, reaches: action.id, actionsByID: actionsByID, visited: []) {
+                    issues.append(blocker(
+                        "/actions/\(actionIndex)/steps/\(stepIndex)",
+                        "Workflow step introduces a cycle back to action '\(action.id)'."
+                    ))
                 }
             }
         }
-        return actionIDs
+    }
+
+    private static func compositeAction(
+        _ actionID: String,
+        reaches targetID: String,
+        actionsByID: [String: WorkspaceAppActionSpec],
+        visited: Set<String>
+    ) -> Bool {
+        guard !visited.contains(actionID),
+              let action = actionsByID[actionID],
+              isCompositeAction(action) else {
+            return false
+        }
+        if action.steps.contains(targetID) {
+            return true
+        }
+        var visited = visited
+        visited.insert(actionID)
+        return action.steps.contains {
+            compositeAction($0, reaches: targetID, actionsByID: actionsByID, visited: visited)
+        }
+    }
+
+    private static func isCompositeAction(_ action: WorkspaceAppActionSpec) -> Bool {
+        action.type == "pipeline.run" || action.type == "loop.run"
+    }
+
+    private static func validateLoopAction(
+        _ action: WorkspaceAppActionSpec,
+        path: String,
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        if (action.maxIterations ?? 0) <= 0 {
+            issues.append(blocker("\(path)/maxIterations", "Loop action must declare a positive maximum iteration count."))
+        }
+        if (action.timeoutSeconds ?? 0) <= 0 {
+            issues.append(blocker("\(path)/timeoutSeconds", "Loop action must declare a positive timeout."))
+        }
+        if let delaySeconds = action.delaySeconds, delaySeconds < 0 {
+            issues.append(blocker("\(path)/delaySeconds", "Loop action delay cannot be negative."))
+        }
+        if action.gateField?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            issues.append(blocker("\(path)/gateField", "Loop action must declare a stop-condition field."))
+        }
+        let normalizedOperator = action.gateOperator?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if normalizedOperator.isEmpty {
+            issues.append(blocker("\(path)/gateOperator", "Loop action must declare a stop-condition operator."))
+        } else if !WorkspaceAppExpressionGateOperator.allRawValues.contains(normalizedOperator) {
+            issues.append(blocker("\(path)/gateOperator", "Loop stop-condition operator '\(normalizedOperator)' is not supported."))
+        }
+        if WorkspaceAppExpressionGateOperator.requiresExpectedValue(normalizedOperator),
+           action.gateValue == nil {
+            issues.append(blocker("\(path)/gateValue", "Loop stop-condition operator '\(normalizedOperator)' must declare a comparison value."))
+        }
     }
 
     private static func validateAgentRecommendationGate(

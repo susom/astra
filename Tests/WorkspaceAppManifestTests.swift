@@ -398,6 +398,79 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid loop bounds and stop conditions")
+    func validationRejectsInvalidLoopBoundsAndStopConditions() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "review_loop",
+                type: "loop.run",
+                label: "Review Loop",
+                gateField: " ",
+                gateOperator: "equals",
+                steps: ["list_items"],
+                maxIterations: 0,
+                timeoutSeconds: 0,
+                delaySeconds: -1
+            ),
+            WorkspaceAppActionSpec(id: "list_items", type: "appStorage.query", label: "List", table: "review_items")
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/maxIterations" && $0.message.contains("positive maximum iteration")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/timeoutSeconds" && $0.message.contains("positive timeout")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/delaySeconds" && $0.message.contains("cannot be negative")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/gateField" && $0.message.contains("stop-condition field")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/gateValue" && $0.message.contains("comparison value")
+        })
+    }
+
+    @Test("manifest validation rejects recursive workflow step graphs")
+    func validationRejectsRecursiveWorkflowStepGraphs() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "review_loop",
+                type: "loop.run",
+                label: "Review Loop",
+                gateField: "status",
+                gateOperator: "equals",
+                gateValue: .text("done"),
+                steps: ["refresh_pipeline"],
+                maxIterations: 3,
+                timeoutSeconds: 30
+            ),
+            WorkspaceAppActionSpec(
+                id: "refresh_pipeline",
+                type: "pipeline.run",
+                label: "Refresh Pipeline",
+                steps: ["list_items", "review_loop"]
+            ),
+            WorkspaceAppActionSpec(id: "list_items", type: "appStorage.query", label: "List", table: "review_items")
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/steps/0" && $0.message.contains("cycle back to action 'review_loop'")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/1/steps/1" && $0.message.contains("cycle back to action 'refresh_pipeline'")
+        })
+    }
+
     @Test("manifest decoding keeps legacy actions without pipeline steps compatible")
     func manifestDecodingKeepsLegacyActionsWithoutPipelineStepsCompatible() throws {
         let json = """
