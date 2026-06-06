@@ -218,10 +218,26 @@ enum WorkspaceAppManifestValidator {
             if widget.markdownContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 issues.append(blocker("\(path)/markdownContent", "Markdown widget content is required."))
             }
+        case "diagram":
+            validateDiagramWidget(widget, path: path, issues: &issues)
         case "webView":
             validateWebViewWidget(widget, path: path, actionIDs: actionIDs, issues: &issues)
         default:
             break
+        }
+    }
+
+    private static func validateDiagramWidget(
+        _ widget: WorkspaceAppWidgetSpec,
+        path: String,
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        if widget.diagramContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            issues.append(blocker("\(path)/diagramContent", "Diagram widget content is required."))
+        }
+        let kind = widget.diagramKind?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "flow"
+        if !["flow", "pipeline", "entityRelationship"].contains(kind) {
+            issues.append(blocker("\(path)/diagramKind", "Diagram kind '\(kind)' is not supported."))
         }
     }
 

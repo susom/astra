@@ -70,11 +70,12 @@ struct WorkspaceAppManifestInspectorPresentation: Equatable {
 
 struct WorkspaceAppNativeSurfacePresentation: Equatable {
     var markdowns: [WorkspaceAppMarkdownPresentation]
+    var diagrams: [WorkspaceAppDiagramPresentation]
     var metrics: [WorkspaceAppMetricPresentation]
     var charts: [WorkspaceAppChartPresentation]
 
     var isEmpty: Bool {
-        markdowns.isEmpty && metrics.isEmpty && charts.isEmpty
+        markdowns.isEmpty && diagrams.isEmpty && metrics.isEmpty && charts.isEmpty
     }
 }
 
@@ -108,6 +109,21 @@ struct WorkspaceAppMarkdownPresentation: Identifiable, Equatable {
     var id: String
     var label: String
     var content: String
+}
+
+struct WorkspaceAppDiagramPresentation: Identifiable, Equatable {
+    struct Edge: Identifiable, Equatable {
+        var id: String { "\(from)->\(to)" }
+        var from: String
+        var to: String
+    }
+
+    var id: String
+    var label: String
+    var kind: String
+    var edges: [Edge]
+    var rawContent: String
+    var emptyMessage: String
 }
 
 struct WorkspaceAppChartPresentation: Identifiable, Equatable {
@@ -553,11 +569,12 @@ enum WorkspaceAppNativeSurfaceBuilder {
         storageTables: [WorkspaceAppStorageTableSnapshot]
     ) -> WorkspaceAppNativeSurfacePresentation {
         guard let manifest else {
-            return WorkspaceAppNativeSurfacePresentation(markdowns: [], metrics: [], charts: [])
+            return WorkspaceAppNativeSurfacePresentation(markdowns: [], diagrams: [], metrics: [], charts: [])
         }
 
         let tablesByName = Dictionary(uniqueKeysWithValues: storageTables.map { ($0.name, $0) })
         var markdowns: [WorkspaceAppMarkdownPresentation] = []
+        var diagrams: [WorkspaceAppDiagramPresentation] = []
         var metrics: [WorkspaceAppMetricPresentation] = []
         var charts: [WorkspaceAppChartPresentation] = []
 
@@ -567,6 +584,10 @@ enum WorkspaceAppNativeSurfaceBuilder {
                 case "markdown":
                     if let markdown = markdown(widget: widget) {
                         markdowns.append(markdown)
+                    }
+                case "diagram":
+                    if let diagram = diagram(widget: widget) {
+                        diagrams.append(diagram)
                     }
                 case "metric":
                     if let table = table(for: widget, view: view, tablesByName: tablesByName) {
@@ -582,7 +603,7 @@ enum WorkspaceAppNativeSurfaceBuilder {
             }
         }
 
-        return WorkspaceAppNativeSurfacePresentation(markdowns: markdowns, metrics: metrics, charts: charts)
+        return WorkspaceAppNativeSurfacePresentation(markdowns: markdowns, diagrams: diagrams, metrics: metrics, charts: charts)
     }
 
     private static func table(
@@ -605,6 +626,71 @@ enum WorkspaceAppNativeSurfaceBuilder {
             label: widget.label,
             content: content
         )
+    }
+
+    private static func diagram(widget: WorkspaceAppWidgetSpec) -> WorkspaceAppDiagramPresentation? {
+        let content = widget.diagramContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !content.isEmpty else { return nil }
+        return WorkspaceAppDiagramPresentation(
+            id: widget.id,
+            label: widget.label,
+            kind: widget.diagramKind?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? widget.diagramKind! : "flow",
+            edges: diagramEdges(from: content),
+            rawContent: content,
+            emptyMessage: "No diagram edges found."
+        )
+    }
+
+    private static func diagramEdges(from content: String) -> [WorkspaceAppDiagramPresentation.Edge] {
+        var aliases: [String: String] = [:]
+        var edges: [WorkspaceAppDiagramPresentation.Edge] = []
+        for line in content.split(whereSeparator: \.isNewline) {
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty,
+                      !trimmed.hasPrefix("flowchart"),
+                      !trimmed.hasPrefix("graph") else {
+                    continue
+                }
+                let separators = ["-->", "->"]
+                guard let separator = separators.first(where: { trimmed.contains($0) }) else {
+                    continue
+                }
+                let parts = trimmed.components(separatedBy: separator)
+                guard parts.count >= 2 else { continue }
+                let fromNode = diagramNode(parts[0])
+                let toNode = diagramNode(parts[1])
+                if let label = fromNode.label {
+                    aliases[fromNode.id] = label
+                }
+                if let label = toNode.label {
+                    aliases[toNode.id] = label
+                }
+                let from = fromNode.label ?? aliases[fromNode.id] ?? fromNode.id
+                let to = toNode.label ?? aliases[toNode.id] ?? toNode.id
+                guard !from.isEmpty, !to.isEmpty else { continue }
+                edges.append(WorkspaceAppDiagramPresentation.Edge(from: from, to: to))
+            }
+        return edges
+    }
+
+    private static func diagramNode(_ raw: String) -> (id: String, label: String?) {
+        var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let commentRange = value.range(of: "%%") {
+            value = String(value[..<commentRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let bracketStart = value.firstIndex(where: { ["[", "(", "{"].contains($0) }),
+           let bracketEnd = value.lastIndex(where: { ["]", ")", "}"].contains($0) }),
+           bracketStart < bracketEnd {
+            let id = String(value[..<bracketStart]).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+            let label = String(value[value.index(after: bracketStart)..<bracketEnd])
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+            return (id: id, label: label.isEmpty ? nil : label)
+        }
+        let id = value
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+            .replacingOccurrences(of: "|", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (id: id, label: nil)
     }
 
     private static func metric(

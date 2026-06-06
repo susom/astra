@@ -152,6 +152,37 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid diagram widgets")
+    func validationRejectsInvalidDiagramWidgets() {
+        var manifest = Self.reconciliationManifest()
+        manifest.views = [
+            WorkspaceAppViewSpec(
+                id: "overview",
+                type: "dashboard",
+                title: "Overview",
+                widgets: [
+                    WorkspaceAppWidgetSpec(
+                        id: "process",
+                        type: "diagram",
+                        label: "Process",
+                        diagramContent: "   ",
+                        diagramKind: "sequence"
+                    )
+                ]
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/diagramContent" && $0.message.contains("Diagram widget content")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/diagramKind" && $0.message.contains("not supported")
+        })
+    }
+
 
     @Test("WebView bridge only accepts declared widget action requests")
     func webViewBridgeOnlyAcceptsDeclaredWidgetActions() {
@@ -476,11 +507,19 @@ struct WorkspaceAppManifestTests {
             label: "Review notes",
             markdownContent: "**Check** missing records before export."
         ))
+        manifest.views[0].widgets.append(WorkspaceAppWidgetSpec(
+            id: "review_flow",
+            type: "diagram",
+            label: "Review flow",
+            diagramContent: "flowchart LR\nextract[Extract] --> validate{Validate}\nvalidate --> export[Export]",
+            diagramKind: "pipeline"
+        ))
         let data = try WorkspaceAppService.encodeManifest(manifest)
         let decoded = try JSONDecoder().decode(WorkspaceAppManifest.self, from: data)
         let view = try #require(decoded.views.first)
         let widget = try #require(view.widgets.first)
-        let markdown = try #require(view.widgets.last)
+        let markdown = try #require(view.widgets.first { $0.id == "review_notes" })
+        let diagram = try #require(view.widgets.first { $0.id == "review_flow" })
 
         #expect(view.table == "review_items")
         #expect(widget.id == "review_count")
@@ -490,6 +529,9 @@ struct WorkspaceAppManifestTests {
         #expect(markdown.id == "review_notes")
         #expect(markdown.type == "markdown")
         #expect(markdown.markdownContent == "**Check** missing records before export.")
+        #expect(diagram.type == "diagram")
+        #expect(diagram.diagramKind == "pipeline")
+        #expect(diagram.diagramContent?.contains("validate --> export") == true)
     }
 
     @Test("manifest decoding keeps legacy view specs without widgets compatible")

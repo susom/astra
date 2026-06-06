@@ -238,7 +238,7 @@ struct WorkspaceAppDetailView: View {
                         .font(Stanford.ui(15, weight: .semibold))
                         .foregroundStyle(.primary)
 
-                    Text("\(surface.markdowns.count + surface.metrics.count + surface.charts.count) widgets")
+                    Text("\(surface.markdowns.count + surface.diagrams.count + surface.metrics.count + surface.charts.count) widgets")
                         .font(Stanford.caption(11).weight(.medium))
                         .foregroundStyle(.secondary)
 
@@ -247,6 +247,10 @@ struct WorkspaceAppDetailView: View {
 
                 ForEach(surface.markdowns) { markdown in
                     WorkspaceAppMarkdownCard(markdown: markdown)
+                }
+
+                ForEach(surface.diagrams) { diagram in
+                    WorkspaceAppDiagramCard(diagram: diagram)
                 }
 
                 if !surface.metrics.isEmpty {
@@ -567,6 +571,82 @@ private struct WorkspaceAppMarkdownCard: View {
             markdown: markdown.content,
             options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(markdown.content)
+    }
+}
+
+private struct WorkspaceAppDiagramCard: View {
+    let diagram: WorkspaceAppDiagramPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(diagram.label)
+                    .font(Stanford.ui(13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(diagram.kind)
+                    .font(Stanford.caption(11).weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            if diagram.edges.isEmpty {
+                Text(diagram.emptyMessage)
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(diagram.edges) { edge in
+                        WorkspaceAppDiagramEdgeRow(edge: edge)
+                    }
+                }
+            }
+
+            Text(diagram.rawContent)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+}
+
+private struct WorkspaceAppDiagramEdgeRow: View {
+    let edge: WorkspaceAppDiagramPresentation.Edge
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(edge.from)
+                .font(Stanford.caption(12).weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Image(systemName: "arrow.right")
+                .font(Stanford.caption(11).weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            Text(edge.to)
+                .font(Stanford.caption(12).weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(Color.primary.opacity(0.035))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 }
 

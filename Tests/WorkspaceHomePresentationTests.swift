@@ -504,6 +504,13 @@ struct WorkspaceHomePresentationTests {
                             markdownContent: "Use **reviewed** purchase records."
                         ),
                         WorkspaceAppWidgetSpec(
+                            id: "review_flow",
+                            type: "diagram",
+                            label: "Review flow",
+                            diagramContent: "flowchart LR\nextract[Extract] --> review{Review}\nreview --> export[Export]",
+                            diagramKind: "pipeline"
+                        ),
+                        WorkspaceAppWidgetSpec(
                             id: "purchase_count",
                             type: "metric",
                             label: "Purchases",
@@ -550,6 +557,12 @@ struct WorkspaceHomePresentationTests {
                 label: "Review note",
                 content: "Use **reviewed** purchase records."
             )
+        ])
+        #expect(surface.diagrams.map(\.id) == ["review_flow"])
+        #expect(surface.diagrams[0].kind == "pipeline")
+        #expect(surface.diagrams[0].edges == [
+            WorkspaceAppDiagramPresentation.Edge(from: "Extract", to: "Review"),
+            WorkspaceAppDiagramPresentation.Edge(from: "Review", to: "Export")
         ])
         #expect(surface.metrics.map(\.id) == ["purchase_count", "total_spend"])
         #expect(surface.metrics[0].value == "3")
