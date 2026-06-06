@@ -14,6 +14,7 @@ struct WorkspaceAppDetailView: View {
     @State private var activeRecordAction: WorkspaceAppDetailActionPresentation?
     @State private var recordFormValues: [String: String] = [:]
     @State private var recordFormError = ""
+    @State private var pendingDeleteRecordID: String?
 
     private var presentation: WorkspaceAppDetailPresentation {
         WorkspaceAppsPresentation.detail(for: app)
@@ -275,7 +276,16 @@ struct WorkspaceAppDetailView: View {
                 }
 
                 ForEach(dataSnapshot.storageTables, id: \.name) { table in
-                    WorkspaceAppStorageTableView(table: table)
+                    WorkspaceAppStorageTableView(
+                        table: table,
+                        rowActions: WorkspaceAppStorageRowActionPresentationBuilder.presentation(
+                            manifest: dataSnapshot.manifest,
+                            table: table
+                        ),
+                        pendingDeleteRecordID: pendingDeleteRecordID,
+                        onEdit: editRecord,
+                        onDelete: deleteRecord
+                    )
                 }
             }
         }
@@ -297,6 +307,61 @@ struct WorkspaceAppDetailView: View {
         activeRecordAction = action
         recordFormValues = [:]
         recordFormError = ""
+        pendingDeleteRecordID = nil
+    }
+
+    private func editRecord(
+        action: WorkspaceAppDetailActionPresentation,
+        tableName: String,
+        row: [String: WorkspaceAppStorageValue]
+    ) {
+        guard let table = dataSnapshot.manifest?.storage?.tables.first(where: { $0.name == tableName }) else {
+            actionStatusMessage = "Storage schema is unavailable."
+            return
+        }
+        activeRecordAction = action
+        recordFormValues = WorkspaceAppStorageRowActionPresentationBuilder.formValues(for: row, table: table)
+        recordFormError = ""
+        pendingDeleteRecordID = nil
+    }
+
+    private func deleteRecord(
+        action: WorkspaceAppDetailActionPresentation,
+        primaryKey: String,
+        row: [String: WorkspaceAppStorageValue]
+    ) {
+        guard let record = WorkspaceAppStorageRowActionPresentationBuilder.primaryKeyRecord(
+            for: row,
+            primaryKey: primaryKey
+        ) else {
+            actionStatusMessage = "Delete needs a selected record primary key."
+            return
+        }
+
+        let recordID = deleteRecordID(table: action.input.table, primaryKey: primaryKey, row: row)
+        guard pendingDeleteRecordID == recordID else {
+            pendingDeleteRecordID = recordID
+            activeRecordAction = nil
+            recordFormError = ""
+            actionStatusMessage = "Confirm delete for this record."
+            return
+        }
+
+        pendingDeleteRecordID = nil
+        runAction(
+            WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: action.label,
+                type: action.type,
+                isEnabled: action.isEnabled,
+                disabledReason: action.disabledReason,
+                input: WorkspaceAppActionInput(
+                    table: action.input.table,
+                    record: record,
+                    confirmedDestructive: true
+                )
+            )
+        )
     }
 
     private func clearRecordForm() {
@@ -333,6 +398,15 @@ struct WorkspaceAppDetailView: View {
         } catch {
             recordFormError = error.localizedDescription
         }
+    }
+
+    private func deleteRecordID(
+        table: String?,
+        primaryKey: String,
+        row: [String: WorkspaceAppStorageValue]
+    ) -> String {
+        let value = WorkspaceAppStorageRowActionPresentationBuilder.displayValue(row[primaryKey])
+        return "\(table ?? ""):\(primaryKey):\(value)"
     }
 
     private func runAction(_ action: WorkspaceAppDetailActionPresentation) {
@@ -609,6 +683,10 @@ private struct WorkspaceAppMetadataRow: View {
 
 private struct WorkspaceAppStorageTableView: View {
     let table: WorkspaceAppStorageTableSnapshot
+    let rowActions: WorkspaceAppStorageRowActionsPresentation
+    let pendingDeleteRecordID: String?
+    let onEdit: (WorkspaceAppDetailActionPresentation, String, [String: WorkspaceAppStorageValue]) -> Void
+    let onDelete: (WorkspaceAppDetailActionPresentation, String, [String: WorkspaceAppStorageValue]) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -637,9 +715,20 @@ private struct WorkspaceAppStorageTableView: View {
                     .foregroundStyle(.secondary)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
-                    WorkspaceAppStorageHeaderRow(columns: table.columns)
+                    WorkspaceAppStorageHeaderRow(columns: table.columns, hasActions: rowActions.hasActions)
                     ForEach(Array(table.rows.prefix(5).enumerated()), id: \.offset) { _, row in
-                        WorkspaceAppStorageRecordRow(columns: table.columns, row: row)
+                        WorkspaceAppStorageRecordRow(
+                            columns: table.columns,
+                            row: row,
+                            rowActions: rowActions,
+                            isPendingDelete: isPendingDelete(row),
+                            onEdit: { action in
+                                onEdit(action, table.name, row)
+                            },
+                            onDelete: { action, primaryKey in
+                                onDelete(action, primaryKey, row)
+                            }
+                        )
                     }
                 }
             }
@@ -652,10 +741,17 @@ private struct WorkspaceAppStorageTableView: View {
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
     }
+
+    private func isPendingDelete(_ row: [String: WorkspaceAppStorageValue]) -> Bool {
+        guard let primaryKey = rowActions.primaryKey else { return false }
+        let value = WorkspaceAppStorageRowActionPresentationBuilder.displayValue(row[primaryKey])
+        return pendingDeleteRecordID == "\(table.name):\(primaryKey):\(value)"
+    }
 }
 
 private struct WorkspaceAppStorageHeaderRow: View {
     let columns: [String]
+    let hasActions: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -666,6 +762,13 @@ private struct WorkspaceAppStorageHeaderRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .lineLimit(1)
             }
+            if hasActions {
+                Text("Actions")
+                    .font(Stanford.caption(11).weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 96, alignment: .trailing)
+                    .lineLimit(1)
+            }
         }
     }
 }
@@ -673,6 +776,10 @@ private struct WorkspaceAppStorageHeaderRow: View {
 private struct WorkspaceAppStorageRecordRow: View {
     let columns: [String]
     let row: [String: WorkspaceAppStorageValue]
+    let rowActions: WorkspaceAppStorageRowActionsPresentation
+    let isPendingDelete: Bool
+    let onEdit: (WorkspaceAppDetailActionPresentation) -> Void
+    let onDelete: (WorkspaceAppDetailActionPresentation, String) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -684,6 +791,31 @@ private struct WorkspaceAppStorageRecordRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
+            if rowActions.hasActions {
+                HStack(spacing: 6) {
+                    if let updateAction = rowActions.updateAction {
+                        Button(action: { onEdit(updateAction) }) {
+                            Image(systemName: "pencil")
+                                .font(Stanford.caption(11).weight(.semibold))
+                                .frame(width: 24, height: 22)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Edit record")
+                    }
+
+                    if let deleteAction = rowActions.deleteAction,
+                       let primaryKey = rowActions.primaryKey {
+                        Button(role: .destructive, action: { onDelete(deleteAction, primaryKey) }) {
+                            Image(systemName: isPendingDelete ? "checkmark" : "trash")
+                                .font(Stanford.caption(11).weight(.semibold))
+                                .frame(width: 24, height: 22)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(isPendingDelete ? "Confirm delete" : "Delete record")
+                    }
+                }
+                .frame(width: 96, alignment: .trailing)
+            }
         }
         .padding(.vertical, 5)
         .overlay(alignment: .top) {
@@ -694,18 +826,8 @@ private struct WorkspaceAppStorageRecordRow: View {
     }
 
     private func displayValue(_ value: WorkspaceAppStorageValue?) -> String {
-        switch value {
-        case .null, nil:
-            "-"
-        case .text(let text):
-            text
-        case .integer(let integer):
-            "\(integer)"
-        case .real(let real):
-            real.formatted(.number.precision(.fractionLength(0...2)))
-        case .bool(let bool):
-            bool ? "true" : "false"
-        }
+        let displayValue = WorkspaceAppStorageRowActionPresentationBuilder.displayValue(value)
+        return displayValue.isEmpty ? "-" : displayValue
     }
 }
 

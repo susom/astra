@@ -289,6 +289,99 @@ struct WorkspaceHomePresentationTests {
         }
     }
 
+    @Test("Workspace app storage row actions bind update and delete to selected primary key records")
+    func workspaceAppStorageRowActionsBindUpdateAndDeleteToSelectedPrimaryKeyRecords() throws {
+        let tableSchema = WorkspaceAppStorageTable(name: "items", columns: [
+            WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+            WorkspaceAppStorageColumn(name: "name", type: "text", required: true),
+            WorkspaceAppStorageColumn(name: "quantity", type: "integer"),
+            WorkspaceAppStorageColumn(name: "purchased", type: "bool")
+        ])
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "grocery", name: "Grocery"),
+            storage: WorkspaceAppStorageSchema(tables: [tableSchema]),
+            actions: [
+                WorkspaceAppActionSpec(id: "editItem", type: "appStorage.update", label: "Edit Item", table: "items"),
+                WorkspaceAppActionSpec(id: "deleteItem", type: "appStorage.delete", label: "Delete Item", table: "items")
+            ]
+        )
+        let snapshot = WorkspaceAppStorageTableSnapshot(
+            name: "items",
+            columns: ["id", "name", "quantity", "purchased"],
+            rows: [[
+                "id": .text("00000000-0000-0000-0000-000000000123"),
+                "name": .text("Apples"),
+                "quantity": .integer(2),
+                "purchased": .bool(false)
+            ]],
+            errorMessage: nil
+        )
+
+        let rowActions = WorkspaceAppStorageRowActionPresentationBuilder.presentation(
+            manifest: manifest,
+            table: snapshot
+        )
+
+        #expect(rowActions.primaryKey == "id")
+        #expect(rowActions.updateAction?.id == "editItem")
+        #expect(rowActions.updateAction?.input.table == "items")
+        #expect(rowActions.deleteAction?.id == "deleteItem")
+        #expect(rowActions.deleteAction?.input.table == "items")
+        #expect(rowActions.hasActions)
+
+        let row = try #require(snapshot.rows.first)
+        let formValues = WorkspaceAppStorageRowActionPresentationBuilder.formValues(
+            for: row,
+            table: tableSchema
+        )
+        #expect(formValues["id"] == "00000000-0000-0000-0000-000000000123")
+        #expect(formValues["name"] == "Apples")
+        #expect(formValues["quantity"] == "2")
+        #expect(formValues["purchased"] == "false")
+
+        let primaryKeyRecord = try #require(WorkspaceAppStorageRowActionPresentationBuilder.primaryKeyRecord(
+            for: row,
+            primaryKey: "id"
+        ))
+        #expect(primaryKeyRecord == ["id": .text("00000000-0000-0000-0000-000000000123")])
+        #expect(WorkspaceAppStorageRowActionPresentationBuilder.primaryKeyRecord(
+            for: ["id": .null],
+            primaryKey: "id"
+        ) == nil)
+    }
+
+    @Test("Workspace app storage row actions explain missing primary keys")
+    func workspaceAppStorageRowActionsExplainMissingPrimaryKeys() {
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "notes", name: "Notes"),
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "notes", columns: [
+                    WorkspaceAppStorageColumn(name: "title", type: "text")
+                ])
+            ]),
+            actions: [
+                WorkspaceAppActionSpec(id: "editNote", type: "appStorage.update", label: "Edit Note", table: "notes")
+            ]
+        )
+        let snapshot = WorkspaceAppStorageTableSnapshot(
+            name: "notes",
+            columns: ["title"],
+            rows: [["title": .text("Draft")]],
+            errorMessage: nil
+        )
+
+        let rowActions = WorkspaceAppStorageRowActionPresentationBuilder.presentation(
+            manifest: manifest,
+            table: snapshot
+        )
+
+        #expect(rowActions.primaryKey == nil)
+        #expect(rowActions.updateAction == nil)
+        #expect(rowActions.deleteAction == nil)
+        #expect(!rowActions.hasActions)
+        #expect(rowActions.disabledReason == "This table does not declare a primary key.")
+    }
+
     @Test("Workspace app native surface renders storage backed metrics and charts")
     func workspaceAppNativeSurfaceRendersStorageBackedMetricsAndCharts() throws {
         let manifest = WorkspaceAppManifest(

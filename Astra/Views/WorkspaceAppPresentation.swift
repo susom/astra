@@ -41,6 +41,18 @@ struct WorkspaceAppDetailActionPresentation: Identifiable, Equatable {
     var input: WorkspaceAppActionInput
 }
 
+struct WorkspaceAppStorageRowActionsPresentation: Equatable {
+    var tableName: String
+    var primaryKey: String?
+    var updateAction: WorkspaceAppDetailActionPresentation?
+    var deleteAction: WorkspaceAppDetailActionPresentation?
+    var disabledReason: String?
+
+    var hasActions: Bool {
+        updateAction != nil || deleteAction != nil
+    }
+}
+
 struct WorkspaceAppNativeSurfacePresentation: Equatable {
     var metrics: [WorkspaceAppMetricPresentation]
     var charts: [WorkspaceAppChartPresentation]
@@ -169,6 +181,98 @@ enum WorkspaceAppStorageRecordDraftBuilder {
         default:
             return .text(rawValue)
         }
+    }
+}
+
+enum WorkspaceAppStorageRowActionPresentationBuilder {
+    static func presentation(
+        manifest: WorkspaceAppManifest?,
+        table: WorkspaceAppStorageTableSnapshot
+    ) -> WorkspaceAppStorageRowActionsPresentation {
+        guard let manifest,
+              let tableSchema = manifest.storage?.tables.first(where: { $0.name == table.name }) else {
+            return WorkspaceAppStorageRowActionsPresentation(
+                tableName: table.name,
+                primaryKey: nil,
+                updateAction: nil,
+                deleteAction: nil,
+                disabledReason: "Storage schema is unavailable."
+            )
+        }
+
+        guard let primaryKey = tableSchema.columns.first(where: \.primaryKey)?.name else {
+            return WorkspaceAppStorageRowActionsPresentation(
+                tableName: table.name,
+                primaryKey: nil,
+                updateAction: nil,
+                deleteAction: nil,
+                disabledReason: "This table does not declare a primary key."
+            )
+        }
+
+        return WorkspaceAppStorageRowActionsPresentation(
+            tableName: table.name,
+            primaryKey: primaryKey,
+            updateAction: rowAction(type: "appStorage.update", manifest: manifest, tableName: table.name),
+            deleteAction: rowAction(type: "appStorage.delete", manifest: manifest, tableName: table.name),
+            disabledReason: nil
+        )
+    }
+
+    static func formValues(
+        for row: [String: WorkspaceAppStorageValue],
+        table: WorkspaceAppStorageTable
+    ) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: table.columns.map { column in
+            (column.name, displayValue(row[column.name]))
+        })
+    }
+
+    static func primaryKeyRecord(
+        for row: [String: WorkspaceAppStorageValue],
+        primaryKey: String
+    ) -> [String: WorkspaceAppStorageValue]? {
+        guard let value = row[primaryKey], value != .null else {
+            return nil
+        }
+        return [primaryKey: value]
+    }
+
+    static func displayValue(_ value: WorkspaceAppStorageValue?) -> String {
+        switch value {
+        case .null, nil:
+            ""
+        case .text(let text):
+            text
+        case .integer(let integer):
+            "\(integer)"
+        case .real(let real):
+            real.formatted(.number.precision(.fractionLength(0...2)))
+        case .bool(let bool):
+            bool ? "true" : "false"
+        }
+    }
+
+    private static func rowAction(
+        type: String,
+        manifest: WorkspaceAppManifest,
+        tableName: String
+    ) -> WorkspaceAppDetailActionPresentation? {
+        guard let action = manifest.actions.first(where: { action in
+            action.type == type && (action.table == nil || action.table == tableName)
+        }) else {
+            return nil
+        }
+
+        let label = action.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return WorkspaceAppDetailActionPresentation(
+            id: action.id,
+            label: label?.isEmpty == false ? label! : action.id,
+            type: action.type,
+            isEnabled: true,
+            disabledReason: nil,
+            input: WorkspaceAppActionInput(table: tableName)
+        )
     }
 }
 
