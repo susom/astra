@@ -65,6 +65,90 @@ struct WorkspaceAppDetailDataLoaderTests {
         #expect(snapshot.storageTables[0].rows[0]["quantity"] == .integer(6))
     }
 
+    @Test("loader includes dependency bindings for the selected app")
+    func loaderIncludesDependencyBindingsForSelectedApp() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-detail-bindings-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(name: "Reconciliation", primaryPath: root.path)
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "recon", name: "Reconciliation"),
+            requirements: [
+                WorkspaceAppRequirement(
+                    id: "warehouse",
+                    contract: "tabularQuery.read",
+                    operations: ["describeTable", "runReadOnlyQuery"]
+                )
+            ]
+        )
+        let manifestURL = URL(fileURLWithPath: WorkspaceFileLayout.appManifestFile(
+            workspacePath: workspace.primaryPath,
+            appID: manifest.app.id
+        ))
+        try FileManager.default.createDirectory(at: manifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try WorkspaceAppService.encodeManifest(manifest).write(to: manifestURL)
+
+        let app = WorkspaceApp(
+            workspaceID: workspace.id,
+            logicalID: manifest.app.id,
+            name: manifest.app.name,
+            manifestRelativePath: WorkspaceFileLayout.relativeAppManifestFile(appID: manifest.app.id),
+            appDirectoryRelativePath: WorkspaceFileLayout.relativeAppDirectory(appID: manifest.app.id),
+            manifestDigest: "digest"
+        )
+        let otherAppID = UUID()
+        let bindings = [
+            WorkspaceAppDependencyBinding(
+                workspaceID: workspace.id,
+                appID: otherAppID,
+                appLogicalID: "other",
+                requirementID: "other",
+                contract: "appStorage.records",
+                operations: ["queryRecords"],
+                optional: false,
+                status: .mapped,
+                implementationID: "app-storage-native",
+                provider: "astra",
+                transport: .native
+            ),
+            WorkspaceAppDependencyBinding(
+                workspaceID: workspace.id,
+                appID: app.id,
+                appLogicalID: app.logicalID,
+                requirementID: "warehouse",
+                contract: "tabularQuery.read",
+                operations: ["describeTable", "runReadOnlyQuery"],
+                optional: false,
+                status: .mapped,
+                implementationID: "bigquery-read-task-backed",
+                provider: "bigQuery",
+                transport: .taskBacked
+            )
+        ]
+
+        let snapshot = WorkspaceAppDetailDataLoader().load(
+            app: app,
+            workspace: workspace,
+            dependencyBindings: bindings
+        )
+
+        #expect(snapshot.errorMessage == nil)
+        #expect(snapshot.dependencyBindings == [
+            WorkspaceAppDependencyBindingSnapshot(
+                requirementID: "warehouse",
+                contract: "tabularQuery.read",
+                operations: ["describeTable", "runReadOnlyQuery"],
+                optional: false,
+                status: .mapped,
+                implementationID: "bigquery-read-task-backed",
+                provider: "bigQuery",
+                transport: .taskBacked
+            )
+        ])
+    }
+
     @Test("loader returns a visible error when manifest is unavailable")
     func loaderReturnsVisibleErrorWhenManifestUnavailable() {
         let workspace = Workspace(name: "Missing", primaryPath: "/tmp/missing-\(UUID().uuidString)")

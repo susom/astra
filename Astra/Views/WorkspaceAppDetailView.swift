@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 struct WorkspaceAppDetailView: View {
@@ -8,6 +9,7 @@ struct WorkspaceAppDetailView: View {
     let onExportPackage: () throws -> URL
     let onRunAction: (WorkspaceAppActionSpec, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
 
+    @Query(sort: \WorkspaceAppDependencyBinding.requirementID) private var dependencyBindings: [WorkspaceAppDependencyBinding]
     @State private var dataSnapshot = WorkspaceAppDetailDataSnapshot.empty
     @State private var actionStatusMessage = ""
     @State private var packageStatusMessage = ""
@@ -29,6 +31,7 @@ struct WorkspaceAppDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     appSurface
+                    dependencySection
                     nativeSurfaceSection
                     actionsSection
                     storageSection
@@ -158,6 +161,35 @@ struct WorkspaceAppDetailView: View {
             WorkspaceAppMetadataRow(label: "Activity", value: presentation.lastActivityLabel)
         }
         .font(Stanford.caption(12))
+    }
+
+    @ViewBuilder
+    private var dependencySection: some View {
+        if !dataSnapshot.dependencyBindings.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Dependencies")
+                        .font(Stanford.ui(15, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    Text("\(dataSnapshot.dependencyBindings.count)")
+                        .font(Stanford.caption(11).weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 240, maximum: 360), spacing: 10, alignment: .top)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    ForEach(dataSnapshot.dependencyBindings, id: \.requirementID) { binding in
+                        WorkspaceAppDependencyBindingCard(binding: binding)
+                    }
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -292,7 +324,11 @@ struct WorkspaceAppDetailView: View {
     }
 
     private func loadDataSnapshot() {
-        dataSnapshot = WorkspaceAppDetailDataLoader().load(app: app, workspace: workspace)
+        dataSnapshot = WorkspaceAppDetailDataLoader().load(
+            app: app,
+            workspace: workspace,
+            dependencyBindings: dependencyBindings
+        )
     }
 
     private func handleAction(_ action: WorkspaceAppDetailActionPresentation) {
@@ -678,6 +714,88 @@ private struct WorkspaceAppMetadataRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
+    }
+}
+
+private struct WorkspaceAppDependencyBindingCard: View {
+    let binding: WorkspaceAppDependencyBindingSnapshot
+
+    private var statusLabel: String {
+        switch binding.status {
+        case .mapped:
+            "Mapped"
+        case .optionalMissing:
+            "Optional missing"
+        case .missingRequired:
+            "Needs mapping"
+        }
+    }
+
+    private var statusIcon: String {
+        switch binding.status {
+        case .mapped:
+            "checkmark.circle"
+        case .optionalMissing:
+            "minus.circle"
+        case .missingRequired:
+            "exclamationmark.triangle"
+        }
+    }
+
+    private var statusColor: Color {
+        binding.status == .mapped ? Stanford.statusHealthy : Stanford.statusWarn
+    }
+
+    private var targetLabel: String {
+        if let provider = binding.provider, let transport = binding.transport {
+            return "\(provider) via \(transport.rawValue)"
+        }
+        return binding.optional ? "Optional dependency is not mapped." : "Required dependency is not mapped."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(binding.requirementID)
+                    .font(Stanford.ui(13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 8)
+
+                Label(statusLabel, systemImage: statusIcon)
+                    .font(Stanford.caption(10).weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .lineLimit(1)
+            }
+
+            Text(binding.contract)
+                .font(Stanford.caption(12).weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Text(targetLabel)
+                .font(Stanford.caption(12))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(binding.operations.isEmpty ? "No operations declared" : binding.operations.joined(separator: ", "))
+                .font(Stanford.caption(11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .topLeading)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+        .help("\(binding.contract): \(targetLabel)")
     }
 }
 

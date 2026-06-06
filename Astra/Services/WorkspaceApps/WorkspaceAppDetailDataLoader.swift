@@ -1,5 +1,16 @@
 import Foundation
 
+struct WorkspaceAppDependencyBindingSnapshot: Equatable {
+    var requirementID: String
+    var contract: String
+    var operations: [String]
+    var optional: Bool
+    var status: WorkspaceAppDependencyBindingStatus
+    var implementationID: String?
+    var provider: String?
+    var transport: WorkspaceAppContractTransport?
+}
+
 struct WorkspaceAppStorageTableSnapshot: Equatable {
     var name: String
     var columns: [String]
@@ -14,11 +25,13 @@ struct WorkspaceAppStorageTableSnapshot: Equatable {
 struct WorkspaceAppDetailDataSnapshot: Equatable {
     var manifest: WorkspaceAppManifest?
     var storageTables: [WorkspaceAppStorageTableSnapshot]
+    var dependencyBindings: [WorkspaceAppDependencyBindingSnapshot]
     var errorMessage: String?
 
     static let empty = WorkspaceAppDetailDataSnapshot(
         manifest: nil,
         storageTables: [],
+        dependencyBindings: [],
         errorMessage: nil
     )
 }
@@ -27,11 +40,16 @@ struct WorkspaceAppDetailDataLoader {
     var fileManager: FileManager = .default
     var storageService = WorkspaceAppStorageService()
 
-    func load(app: WorkspaceApp, workspace: Workspace?) -> WorkspaceAppDetailDataSnapshot {
+    func load(
+        app: WorkspaceApp,
+        workspace: Workspace?,
+        dependencyBindings: [WorkspaceAppDependencyBinding] = []
+    ) -> WorkspaceAppDetailDataSnapshot {
         guard let workspace, !workspace.primaryPath.isEmpty else {
             return WorkspaceAppDetailDataSnapshot(
                 manifest: nil,
                 storageTables: [],
+                dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
                 errorMessage: "Workspace path is unavailable."
             )
         }
@@ -54,15 +72,38 @@ struct WorkspaceAppDetailDataLoader {
             return WorkspaceAppDetailDataSnapshot(
                 manifest: manifest,
                 storageTables: tables,
+                dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
                 errorMessage: nil
             )
         } catch {
             return WorkspaceAppDetailDataSnapshot(
                 manifest: nil,
                 storageTables: [],
+                dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
                 errorMessage: "Could not load app manifest."
             )
         }
+    }
+
+    private func bindingSnapshots(
+        _ bindings: [WorkspaceAppDependencyBinding],
+        appID: UUID
+    ) -> [WorkspaceAppDependencyBindingSnapshot] {
+        bindings
+            .filter { $0.appID == appID }
+            .sorted { $0.requirementID < $1.requirementID }
+            .map { binding in
+                WorkspaceAppDependencyBindingSnapshot(
+                    requirementID: binding.requirementID,
+                    contract: binding.contract,
+                    operations: binding.operations,
+                    optional: binding.optional,
+                    status: binding.status,
+                    implementationID: binding.implementationID,
+                    provider: binding.provider,
+                    transport: binding.transport
+                )
+            }
     }
 
     private func tableSnapshot(
