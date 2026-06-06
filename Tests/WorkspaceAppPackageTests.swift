@@ -116,6 +116,37 @@ struct WorkspaceAppPackageTests {
         #expect(review.permissionMode == .draftOnly)
         #expect(review.requiredDependencies.map(\.contract) == ["appStorage.records"])
         #expect(review.storageTables.map(\.name) == ["items"])
+        #expect(review.dependencyMappings.count == 1)
+        #expect(review.dependencyMappings[0].isMapped)
+        #expect(review.dependencyMappings[0].selectedImplementation?.id == "app-storage-native")
+        #expect(review.dependencyMappings[0].familyName == "App Storage Records")
+    }
+
+    @Test("package import review marks required unmapped dependencies")
+    func packageImportReviewMarksRequiredUnmappedDependencies() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("unmapped.astra-app", isDirectory: true)
+        var manifest = Self.groceryManifest()
+        manifest.requirements = [
+            WorkspaceAppRequirement(
+                id: "customRegistry",
+                contract: "customRegistry.read",
+                operations: ["readRecords"]
+            )
+        ]
+        manifest.sources[0].requirementRef = "customRegistry"
+        manifest.actions[0].requirementRef = "customRegistry"
+        _ = try WorkspaceAppPackageService().exportPackage(manifest: manifest, to: packageURL)
+
+        let review = WorkspaceAppPackageImportReviewer.review(packageURL: packageURL)
+
+        #expect(review.report.installState == .needsDependencyMapping)
+        #expect(review.hasUnresolvedRequiredDependencies)
+        #expect(review.dependencyMappings.count == 1)
+        #expect(!review.dependencyMappings[0].isMapped)
+        #expect(review.dependencyMappings[0].statusLabel == "Needs mapping")
+        #expect(review.dependencyMappings[0].candidateImplementations.isEmpty)
     }
 
     @MainActor

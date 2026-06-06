@@ -70,17 +70,14 @@ struct WorkspaceAppPackageImportReviewView: View {
     }
 
     private var dependencySection: some View {
-        reviewSection("Dependencies", count: review.requiredDependencies.count + review.optionalDependencies.count) {
-            if review.requiredDependencies.isEmpty && review.optionalDependencies.isEmpty {
+        reviewSection("Dependency Mapping", count: review.dependencyMappings.count) {
+            if review.dependencyMappings.isEmpty {
                 Text("No external capability dependencies.")
                     .font(Stanford.caption(12))
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(review.requiredDependencies, id: \.id) { requirement in
-                    dependencyRow(requirement, optional: false)
-                }
-                ForEach(review.optionalDependencies, id: \.id) { requirement in
-                    dependencyRow(requirement, optional: true)
+                ForEach(review.dependencyMappings) { mapping in
+                    dependencyMappingRow(mapping)
                 }
             }
         }
@@ -190,25 +187,33 @@ struct WorkspaceAppPackageImportReviewView: View {
         }
     }
 
-    private func dependencyRow(
-        _ requirement: WorkspaceAppPackageContractRequirement,
-        optional: Bool
-    ) -> some View {
+    private func dependencyMappingRow(_ mapping: WorkspaceAppPackageDependencyMapping) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(requirement.id)
+                Text(mapping.requirement.id)
                     .font(Stanford.caption(12).weight(.semibold))
                     .foregroundStyle(.primary)
 
-                Text(optional ? "Optional" : "Required")
+                Text(mapping.isRequired ? "Required" : "Optional")
                     .font(Stanford.caption(11).weight(.semibold))
-                    .foregroundStyle(optional ? .secondary : Stanford.statusWarn)
+                    .foregroundStyle(mapping.isRequired && !mapping.isMapped ? Stanford.statusWarn : .secondary)
+
+                Text(mapping.statusLabel)
+                    .font(Stanford.caption(11).weight(.semibold))
+                    .foregroundStyle(mapping.isMapped ? Stanford.paloAltoGreen : Stanford.statusWarn)
             }
 
-            Text("\(requirement.contract): \(requirement.operations.joined(separator: ", "))")
+            Text("\(mapping.familyName): \(mapping.operationSummary)")
                 .font(Stanford.caption(12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !mapping.candidateImplementations.isEmpty {
+                Text("Candidates: \(mapping.candidateImplementations.map { $0.provider }.joined(separator: ", "))")
+                    .font(Stanford.caption(11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
