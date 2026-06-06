@@ -34,6 +34,64 @@ struct WorkspaceAppPackageTests {
         #expect(report.installState == .needsPermissionReview)
     }
 
+    @Test("seed data export writes portable typed storage records")
+    func seedDataExportWritesPortableTypedStorageRecords() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery-seed.astra-app", isDirectory: true)
+        let databaseURL = try Self.groceryDatabase(in: root)
+
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-seed",
+            mode: .templatePlusSeedData,
+            appStorageDatabaseURL: databaseURL
+        )
+
+        let dataURL = packageURL.appendingPathComponent("storage/data/seed/items.jsonl")
+        let exportsURL = packageURL.appendingPathComponent("storage/data/exports.json")
+        #expect(FileManager.default.fileExists(atPath: dataURL.path))
+        #expect(FileManager.default.fileExists(atPath: exportsURL.path))
+        #expect(!FileManager.default.fileExists(atPath: packageURL.appendingPathComponent("storage/data/full/items.jsonl").path))
+
+        let exports = try JSONDecoder().decode(
+            [WorkspaceAppPackageDataExport].self,
+            from: Data(contentsOf: exportsURL)
+        )
+        #expect(exports == [
+            WorkspaceAppPackageDataExport(
+                table: "items",
+                policy: .seed,
+                path: "storage/data/seed/items.jsonl",
+                rowCount: 2
+            )
+        ])
+
+        let dataText = try String(contentsOf: dataURL, encoding: .utf8)
+        #expect(dataText.contains(#""name":"Apples""#))
+        #expect(dataText.contains(#""quantity":6"#))
+
+        let report = WorkspaceAppPackageService().validatePackage(at: packageURL)
+        #expect(report.canInstall)
+        #expect(report.package?.exportMode == .templatePlusSeedData)
+    }
+
+    @Test("record export modes require an app storage database")
+    func recordExportModesRequireStorageDatabase() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery-seed.astra-app", isDirectory: true)
+
+        #expect(throws: WorkspaceAppPackageError.missingStorageDatabase(.templatePlusSeedData)) {
+            try WorkspaceAppPackageService().exportPackage(
+                manifest: Self.groceryManifest(),
+                to: packageURL,
+                mode: .templatePlusSeedData
+            )
+        }
+    }
+
     @Test("package validation blocks checksum tampering")
     func packageValidationBlocksChecksumTampering() throws {
         let root = try Self.temporaryRoot()
@@ -231,6 +289,50 @@ struct WorkspaceAppPackageTests {
     }
 
     @MainActor
+    @Test("package import restores portable seed data into app storage")
+    func packageImportRestoresPortableSeedDataIntoAppStorage() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery-seed.astra-app", isDirectory: true)
+        let sourceDatabaseURL = try Self.groceryDatabase(in: root)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-seed",
+            mode: .templatePlusSeedData,
+            appStorageDatabaseURL: sourceDatabaseURL
+        )
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let workspaceURL = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        let workspace = Workspace(name: "Package Import", primaryPath: workspaceURL.path)
+        container.mainContext.insert(workspace)
+
+        let result = try WorkspaceAppPackageService().importPackage(
+            at: packageURL,
+            into: workspace,
+            modelContext: container.mainContext
+        )
+        let importedDatabaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
+            workspacePath: workspace.primaryPath,
+            appID: result.app.logicalID
+        ))
+        let rows = try WorkspaceAppStorageService().records(in: "items", databaseURL: importedDatabaseURL)
+
+        #expect(result.app.sourcePackageID == "grocery-seed")
+        #expect(rows.count == 2)
+        #expect(rows[0]["id"] == .text("item-1"))
+        #expect(rows[0]["name"] == .text("Apples"))
+        #expect(rows[0]["quantity"] == .integer(6))
+        #expect(rows[1]["id"] == .text("item-2"))
+    }
+
+    @MainActor
     @Test("package exporter writes workspace-local portable exports without overwriting")
     func packageExporterWritesWorkspaceLocalPortableExportsWithoutOverwriting() throws {
         let root = try Self.temporaryRoot()
@@ -277,6 +379,33 @@ struct WorkspaceAppPackageTests {
         return root
     }
 
+    static func groceryDatabase(in root: URL) throws -> URL {
+        let databaseURL = root.appendingPathComponent("app.sqlite")
+        let service = WorkspaceAppStorageService()
+        try service.applySchema(try #require(Self.groceryManifest().storage), databaseURL: databaseURL)
+        try service.insertRecord(
+            [
+                "id": .text("item-1"),
+                "name": .text("Apples"),
+                "category": .text("Produce"),
+                "quantity": .integer(6)
+            ],
+            into: "items",
+            databaseURL: databaseURL
+        )
+        try service.insertRecord(
+            [
+                "id": .text("item-2"),
+                "name": .text("Rice"),
+                "category": .text("Pantry"),
+                "quantity": .integer(1)
+            ],
+            into: "items",
+            databaseURL: databaseURL
+        )
+        return databaseURL
+    }
+
     static func groceryManifest() -> WorkspaceAppManifest {
         WorkspaceAppManifest(
             app: WorkspaceAppManifestMetadata(
@@ -298,7 +427,8 @@ struct WorkspaceAppPackageTests {
                 WorkspaceAppStorageTable(name: "items", columns: [
                     WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
                     WorkspaceAppStorageColumn(name: "name", type: "text", required: true),
-                    WorkspaceAppStorageColumn(name: "category", type: "text")
+                    WorkspaceAppStorageColumn(name: "category", type: "text"),
+                    WorkspaceAppStorageColumn(name: "quantity", type: "integer")
                 ])
             ]),
             sources: [

@@ -48,6 +48,19 @@ struct WorkspaceAppPackageChecksum: Codable, Sendable, Equatable {
     var sha256: String
 }
 
+struct WorkspaceAppPackageDataExport: Codable, Sendable, Equatable {
+    var table: String
+    var policy: WorkspaceAppPackageDataExportPolicy
+    var path: String
+    var rowCount: Int
+}
+
+enum WorkspaceAppPackageDataExportPolicy: String, Codable, Sendable, Equatable, CaseIterable {
+    case sample
+    case seed
+    case full
+}
+
 struct WorkspaceAppPackageValidationReport: Equatable {
     struct Issue: Equatable {
         enum Severity: String, Equatable {
@@ -82,7 +95,7 @@ enum WorkspaceAppPackageError: LocalizedError, Equatable {
     case invalidPackage(WorkspaceAppPackageValidationReport)
     case invalidManifest([WorkspaceAppManifestValidationReport.Issue])
     case packageAlreadyExists(String)
-    case unsupportedExportMode(WorkspaceAppPackageExportMode)
+    case missingStorageDatabase(WorkspaceAppPackageExportMode)
 
     var errorDescription: String? {
         switch self {
@@ -94,8 +107,8 @@ enum WorkspaceAppPackageError: LocalizedError, Equatable {
             return "Workspace app manifest is invalid.\n\(messages)"
         case .packageAlreadyExists(let path):
             return "Workspace app package already exists at \(path)."
-        case .unsupportedExportMode(let mode):
-            return "Workspace app package export mode \(mode.rawValue) is not implemented yet."
+        case .missingStorageDatabase(let mode):
+            return "Workspace app package export mode \(mode.rawValue) needs an app storage database."
         }
     }
 }
@@ -109,6 +122,7 @@ struct WorkspaceAppPackageImportResult {
 struct WorkspaceAppPackageService {
     var fileManager: FileManager = .default
     var appService = WorkspaceAppService()
+    var storageService = WorkspaceAppStorageService()
 
     func exportPackage(
         manifest: WorkspaceAppManifest,
@@ -117,12 +131,10 @@ struct WorkspaceAppPackageService {
         version: String = "1.0.0",
         minimumASTRAVersion: String = "0.1.0",
         mode: WorkspaceAppPackageExportMode = .templateOnly,
+        appStorageDatabaseURL: URL? = nil,
         author: String? = nil,
         createdAt: Date = Date()
     ) throws -> URL {
-        guard mode == .templateOnly else {
-            throw WorkspaceAppPackageError.unsupportedExportMode(mode)
-        }
         let report = WorkspaceAppManifestValidator.validate(manifest)
         guard report.isValid else {
             throw WorkspaceAppPackageError.invalidManifest(report.blockers)
@@ -154,6 +166,19 @@ struct WorkspaceAppPackageService {
                 .appendingPathComponent("schema.json")
             try fileManager.createDirectory(at: storageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try writeJSON(storage, to: storageURL)
+        }
+        let dataExports = try exportStorageData(
+            mode: mode,
+            manifest: manifest,
+            databaseURL: appStorageDatabaseURL,
+            packageURL: packageURL
+        )
+        if !dataExports.isEmpty {
+            try writeJSON(dataExports, to: packageURL
+                .appendingPathComponent("storage", isDirectory: true)
+                .appendingPathComponent("data", isDirectory: true)
+                .appendingPathComponent("exports.json")
+            )
         }
         let readmeURL = packageURL
             .appendingPathComponent("docs", isDirectory: true)
@@ -208,6 +233,7 @@ struct WorkspaceAppPackageService {
             validateChecksums(declaredChecksums, packageURL: packageURL, issues: &issues)
             validateAllFilesAreChecksummed(declaredChecksums, packageURL: packageURL, issues: &issues)
         }
+        validateDataExports(package: package, packageURL: packageURL, issues: &issues)
         validateNoForbiddenPortableContent(packageURL: packageURL, issues: &issues)
 
         return WorkspaceAppPackageValidationReport(
@@ -243,6 +269,7 @@ struct WorkspaceAppPackageService {
             sourcePackageVersion: package.version,
             sourcePackageDigest: packageDigest
         )
+        try importStorageData(from: packageURL, manifest: manifest, workspace: workspace)
         return WorkspaceAppPackageImportResult(
             app: result.app,
             report: report,
@@ -305,6 +332,104 @@ struct WorkspaceAppPackageService {
         try data.write(to: url, options: [.atomic])
     }
 
+    private func exportStorageData(
+        mode: WorkspaceAppPackageExportMode,
+        manifest: WorkspaceAppManifest,
+        databaseURL: URL?,
+        packageURL: URL
+    ) throws -> [WorkspaceAppPackageDataExport] {
+        guard let policy = dataPolicy(for: mode),
+              let storage = manifest.storage,
+              !storage.tables.isEmpty else {
+            return []
+        }
+        guard let databaseURL else {
+            throw WorkspaceAppPackageError.missingStorageDatabase(mode)
+        }
+
+        let dataRoot = packageURL
+            .appendingPathComponent("storage", isDirectory: true)
+            .appendingPathComponent("data", isDirectory: true)
+            .appendingPathComponent(policy.rawValue, isDirectory: true)
+        try fileManager.createDirectory(at: dataRoot, withIntermediateDirectories: true)
+
+        return try storage.tables.map { table in
+            let rows = try storageService.records(in: table.name, databaseURL: databaseURL, limit: 10_000)
+            let relativePath = "storage/data/\(policy.rawValue)/\(table.name).jsonl"
+            let dataURL = packageURL.appendingPathComponent(relativePath)
+            try writeJSONLines(rows, to: dataURL)
+            return WorkspaceAppPackageDataExport(
+                table: table.name,
+                policy: policy,
+                path: relativePath,
+                rowCount: rows.count
+            )
+        }
+    }
+
+    private func importStorageData(
+        from packageURL: URL,
+        manifest: WorkspaceAppManifest,
+        workspace: Workspace
+    ) throws {
+        guard let exports = decodeDataExports(at: packageURL), !exports.isEmpty else { return }
+        let databaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
+            workspacePath: workspace.primaryPath,
+            appID: manifest.app.id
+        ))
+        let tables = Set(manifest.storage?.tables.map(\.name) ?? [])
+        for dataExport in exports where tables.contains(dataExport.table) {
+            let rows = try readJSONLines(at: packageURL.appendingPathComponent(dataExport.path))
+            for row in rows {
+                try storageService.insertRecord(row, into: dataExport.table, databaseURL: databaseURL)
+            }
+        }
+    }
+
+    private func decodeDataExports(at packageURL: URL) -> [WorkspaceAppPackageDataExport]? {
+        let url = packageURL
+            .appendingPathComponent("storage", isDirectory: true)
+            .appendingPathComponent("data", isDirectory: true)
+            .appendingPathComponent("exports.json")
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try? JSONDecoder().decode([WorkspaceAppPackageDataExport].self, from: Data(contentsOf: url))
+    }
+
+    private func writeJSONLines(
+        _ rows: [[String: WorkspaceAppStorageValue]],
+        to url: URL
+    ) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let lines = try rows.map { row in
+            String(decoding: try encoder.encode(row), as: UTF8.self)
+        }
+        try Data(lines.joined(separator: "\n").utf8).write(to: url, options: [.atomic])
+    }
+
+    private func readJSONLines(at url: URL) throws -> [[String: WorkspaceAppStorageValue]] {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let decoder = JSONDecoder()
+        return try text
+            .split(whereSeparator: \.isNewline)
+            .map { line in
+                try decoder.decode([String: WorkspaceAppStorageValue].self, from: Data(String(line).utf8))
+            }
+    }
+
+    private func dataPolicy(for mode: WorkspaceAppPackageExportMode) -> WorkspaceAppPackageDataExportPolicy? {
+        switch mode {
+        case .templateOnly:
+            nil
+        case .templatePlusSampleData:
+            .sample
+        case .templatePlusSeedData:
+            .seed
+        case .fullAppExport:
+            .full
+        }
+    }
+
     private func decode<T: Decodable>(
         _ type: T.Type,
         at url: URL,
@@ -363,11 +488,48 @@ struct WorkspaceAppPackageService {
         }
     }
 
+    private func validateDataExports(
+        package: WorkspaceAppPackageManifest?,
+        packageURL: URL,
+        issues: inout [WorkspaceAppPackageValidationReport.Issue]
+    ) {
+        guard let package else { return }
+        let exports = decodeDataExports(at: packageURL) ?? []
+        if package.exportMode == .templateOnly {
+            if !exports.isEmpty {
+                issues.append(blocker("/storage/data/exports.json", "Template-only packages must not include app records."))
+            }
+            return
+        }
+        guard let expectedPolicy = dataPolicy(for: package.exportMode) else { return }
+        for dataExport in exports {
+            guard dataExport.policy == expectedPolicy else {
+                issues.append(blocker("/storage/data/exports.json", "Data export policy does not match package export mode."))
+                continue
+            }
+            guard isPortableRelativePath(dataExport.path),
+                  dataExport.path.hasPrefix("storage/data/\(expectedPolicy.rawValue)/"),
+                  dataExport.path.hasSuffix(".jsonl") else {
+                issues.append(blocker("/storage/data/exports.json", "Data export path must stay within the selected storage data folder."))
+                continue
+            }
+            let url = packageURL.appendingPathComponent(dataExport.path)
+            guard fileManager.fileExists(atPath: url.path) else {
+                issues.append(blocker("/storage/data/exports.json", "Data export references a missing file."))
+                continue
+            }
+            let rowCount = (try? readJSONLines(at: url).count) ?? -1
+            if rowCount != dataExport.rowCount {
+                issues.append(blocker("/storage/data/exports.json", "Data export row count does not match \(dataExport.path)."))
+            }
+        }
+    }
+
     private func validateNoForbiddenPortableContent(
         packageURL: URL,
         issues: inout [WorkspaceAppPackageValidationReport.Issue]
     ) {
-        for path in portableFilePaths(in: packageURL) where path.hasSuffix(".json") || path.hasSuffix(".md") {
+        for path in portableFilePaths(in: packageURL) where path.hasSuffix(".json") || path.hasSuffix(".jsonl") || path.hasSuffix(".md") {
             guard let data = try? Data(contentsOf: packageURL.appendingPathComponent(path)),
                   let text = String(data: data, encoding: .utf8) else {
                 continue

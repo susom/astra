@@ -34,6 +34,7 @@ struct WorkspaceAppPackageExporter {
         app: WorkspaceApp,
         workspace: Workspace,
         version: String = "1.0.0",
+        mode: WorkspaceAppPackageExportMode = .templateOnly,
         createdAt: Date = Date()
     ) throws -> WorkspaceAppPackageExportResult {
         guard !workspace.primaryPath.isEmpty else {
@@ -47,7 +48,11 @@ struct WorkspaceAppPackageExporter {
             to: packageURL,
             packageID: "\(app.logicalID).astra-app",
             version: version,
-            mode: .templateOnly,
+            mode: mode,
+            appStorageDatabaseURL: URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
+                workspacePath: workspace.primaryPath,
+                appID: app.logicalID
+            )),
             createdAt: createdAt
         )
         let report = packageService.validatePackage(at: packageURL)
