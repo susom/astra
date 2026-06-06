@@ -227,11 +227,13 @@ struct WorkspaceAppPackageService {
         let report = validatePackage(at: packageURL)
         guard report.canInstall,
               let package = report.package,
-              let manifest = report.manifest else {
+              var manifest = report.manifest else {
             throw WorkspaceAppPackageError.invalidPackage(report)
         }
         let checksumsURL = packageURL.appendingPathComponent("checksums.json")
         let packageDigest = digest(for: checksumsURL)
+        let existingIDs = try existingLogicalIDs(in: workspace, modelContext: modelContext)
+        manifest = manifestForImport(manifest, existingLogicalIDs: existingIDs)
         let result = try appService.createApp(
             manifest: manifest,
             in: workspace,
@@ -246,6 +248,39 @@ struct WorkspaceAppPackageService {
             report: report,
             manifestURL: result.manifestURL
         )
+    }
+
+    @MainActor
+    private func existingLogicalIDs(
+        in workspace: Workspace,
+        modelContext: ModelContext
+    ) throws -> Set<String> {
+        let workspaceID = workspace.id
+        let descriptor = FetchDescriptor<WorkspaceApp>(
+            predicate: #Predicate<WorkspaceApp> { app in
+                app.workspaceID == workspaceID
+            }
+        )
+        return Set(try modelContext.fetch(descriptor).map(\.logicalID))
+    }
+
+    private func manifestForImport(
+        _ manifest: WorkspaceAppManifest,
+        existingLogicalIDs: Set<String>
+    ) -> WorkspaceAppManifest {
+        guard existingLogicalIDs.contains(manifest.app.id) else {
+            return manifest
+        }
+
+        var copy = manifest
+        let baseID = manifest.app.id
+        var suffix = 2
+        while existingLogicalIDs.contains("\(baseID)-\(suffix)") {
+            suffix += 1
+        }
+        copy.app.id = "\(baseID)-\(suffix)"
+        copy.app.name = "\(manifest.app.name) \(suffix)"
+        return copy
     }
 
     private static func packageRequirement(

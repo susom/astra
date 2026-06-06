@@ -261,6 +261,7 @@ struct WorkspaceHomeContainerView: View {
     let taskQueue: TaskQueue
     let onCreateTask: () -> Void
     let onCreateApp: () -> Void
+    let onImportAppPackage: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
@@ -279,6 +280,7 @@ struct WorkspaceHomeContainerView: View {
         taskQueue: TaskQueue,
         onCreateTask: @escaping () -> Void,
         onCreateApp: @escaping () -> Void,
+        onImportAppPackage: @escaping () -> Void,
         onOpenTask: @escaping (AgentTask) -> Void,
         onOpenApp: @escaping (WorkspaceApp) -> Void,
         onDeleteTask: @escaping (AgentTask) -> Void,
@@ -293,6 +295,7 @@ struct WorkspaceHomeContainerView: View {
         self.taskQueue = taskQueue
         self.onCreateTask = onCreateTask
         self.onCreateApp = onCreateApp
+        self.onImportAppPackage = onImportAppPackage
         self.onOpenTask = onOpenTask
         self.onOpenApp = onOpenApp
         self.onDeleteTask = onDeleteTask
@@ -326,6 +329,7 @@ struct WorkspaceHomeContainerView: View {
             apps: apps,
             onCreateTask: onCreateTask,
             onCreateApp: onCreateApp,
+            onImportAppPackage: onImportAppPackage,
             onOpenTask: onOpenTask,
             onOpenApp: onOpenApp,
             onDeleteTask: onDeleteTask,
@@ -344,6 +348,7 @@ struct WorkspaceHomeView: View {
     var apps: [WorkspaceApp] = []
     let onCreateTask: () -> Void
     let onCreateApp: () -> Void
+    let onImportAppPackage: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onDeleteTask: (AgentTask) -> Void
@@ -479,6 +484,12 @@ struct WorkspaceHomeView: View {
 
             Spacer()
 
+            Button(action: onImportAppPackage) {
+                Label("Import App", systemImage: "shippingbox")
+            }
+            .buttonStyle(.bordered)
+            .help("Review an ASTRA app package")
+
             Button(action: onCreateApp) {
                 Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus.app")
             }
@@ -497,6 +508,12 @@ struct WorkspaceHomeView: View {
                     .foregroundStyle(.primary)
 
                 Spacer()
+
+                Button(action: onImportAppPackage) {
+                    Label("Import App", systemImage: "shippingbox")
+                }
+                .buttonStyle(.borderless)
+                .help("Review an ASTRA app package")
 
                 Button(action: onCreateApp) {
                     Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus")

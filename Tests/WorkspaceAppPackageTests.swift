@@ -95,6 +95,29 @@ struct WorkspaceAppPackageTests {
         #expect(report.installState == .needsDependencyMapping)
     }
 
+    @Test("package import review exposes identity dependencies permissions and storage")
+    func packageImportReviewExposesPackageInspectionFields() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery.astra-app", isDirectory: true)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-template",
+            version: "1.2.3"
+        )
+
+        let review = WorkspaceAppPackageImportReviewer.review(packageURL: packageURL)
+
+        #expect(review.canInstall)
+        #expect(review.packageName == "Grocery Tracker")
+        #expect(review.packageID == "grocery-template")
+        #expect(review.version == "1.2.3")
+        #expect(review.permissionMode == .draftOnly)
+        #expect(review.requiredDependencies.map(\.contract) == ["appStorage.records"])
+        #expect(review.storageTables.map(\.name) == ["items"])
+    }
+
     @MainActor
     @Test("package import installs forked app with package provenance")
     func packageImportInstallsForkedAppWithPackageProvenance() throws {
@@ -131,6 +154,48 @@ struct WorkspaceAppPackageTests {
         #expect(FileManager.default.fileExists(atPath: WorkspaceFileLayout.appDatabaseFile(
             workspacePath: workspace.primaryPath,
             appID: "grocery-tracker"
+        )))
+    }
+
+    @MainActor
+    @Test("package import assigns unique logical IDs for repeated installs")
+    func packageImportAssignsUniqueLogicalIDsForRepeatedInstalls() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery.astra-app", isDirectory: true)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-template",
+            version: "1.2.3"
+        )
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let workspaceURL = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        let workspace = Workspace(name: "Package Import", primaryPath: workspaceURL.path)
+        container.mainContext.insert(workspace)
+
+        let first = try WorkspaceAppPackageService().importPackage(
+            at: packageURL,
+            into: workspace,
+            modelContext: container.mainContext
+        )
+        let second = try WorkspaceAppPackageService().importPackage(
+            at: packageURL,
+            into: workspace,
+            modelContext: container.mainContext
+        )
+
+        #expect(first.app.logicalID == "grocery-tracker")
+        #expect(second.app.logicalID == "grocery-tracker-2")
+        #expect(FileManager.default.fileExists(atPath: WorkspaceFileLayout.appManifestFile(
+            workspacePath: workspace.primaryPath,
+            appID: "grocery-tracker-2"
         )))
     }
 

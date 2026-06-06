@@ -236,6 +236,7 @@ struct ContentView: View {
     @State private var isComposingWorkspaceApp = false
     @State private var workspaceAppStudioInitialIntent = WorkspaceAppStudioBuilder.defaultIntent
     @State private var workspaceAppStudioExistingManifest: WorkspaceAppManifest?
+    @State private var packageImportReview: WorkspaceAppPackageImportReview?
     @State private var showingConfigure = false
     @State private var configureInitialTab: ConfigureTab = .capabilities
     @State private var configureFocusItemID: UUID?
@@ -647,6 +648,7 @@ struct ContentView: View {
             onForkTask: setSelectedTask,
             onCreateTask: startComposingTask,
             onCreateApp: startComposingWorkspaceApp,
+            onImportAppPackage: importWorkspaceAppPackage,
             onOpenTask: openExistingTask,
             onOpenApp: openWorkspaceApp,
             onOpenAppStudio: openWorkspaceAppStudio,
@@ -838,6 +840,17 @@ struct ContentView: View {
             if let ws = schedule.workspace ?? effectiveWorkspace {
                 ScheduleEditorView(workspace: ws, schedule: schedule)
             }
+        }
+        .sheet(item: $packageImportReview) { review in
+            WorkspaceAppPackageImportReviewView(
+                review: review,
+                onCancel: {
+                    packageImportReview = nil
+                },
+                onInstall: {
+                    installReviewedWorkspaceAppPackage(review)
+                }
+            )
         }
         .sheet(isPresented: $showingNewWorkspace, onDismiss: resetNewWorkspaceDraft) {
             NewWorkspaceSheet(
@@ -1775,6 +1788,43 @@ struct ContentView: View {
         isComposingWorkspaceApp = false
         workspaceAppStudioExistingManifest = nil
         workspaceAppStudioInitialIntent = WorkspaceAppStudioBuilder.defaultIntent
+    }
+
+    private func importWorkspaceAppPackage() {
+        let panel = NSOpenPanel()
+        panel.title = "Import ASTRA App Package"
+        panel.prompt = "Review Package"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+
+        guard panel.runModal() == .OK,
+              let url = panel.url else {
+            return
+        }
+
+        let review = WorkspaceAppPackageImportReviewer.review(packageURL: url)
+        packageImportReview = review
+    }
+
+    private func installReviewedWorkspaceAppPackage(_ review: WorkspaceAppPackageImportReview) {
+        guard let workspace = effectiveWorkspace else {
+            externalRouteNotice = "Select a workspace before importing an app package."
+            return
+        }
+
+        do {
+            let result = try WorkspaceAppPackageService().importPackage(
+                at: review.packageURL,
+                into: workspace,
+                modelContext: modelContext
+            )
+            packageImportReview = nil
+            openWorkspaceApp(result.app)
+        } catch {
+            externalRouteNotice = String(describing: error)
+        }
     }
 
     private func publishWorkspaceAppDraft(_ draft: WorkspaceAppStudioDraft) throws {
@@ -2902,6 +2952,7 @@ private struct ContentDetailAreaView: View {
     let onForkTask: (AgentTask) -> Void
     let onCreateTask: () -> Void
     let onCreateApp: () -> Void
+    let onImportAppPackage: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onOpenAppStudio: (WorkspaceApp) -> Void
@@ -3282,6 +3333,7 @@ private struct ContentDetailAreaView: View {
             onForkTask: onForkTask,
             onCreateTask: onCreateTask,
             onCreateApp: onCreateApp,
+            onImportAppPackage: onImportAppPackage,
             onOpenTask: onOpenTask,
             onOpenApp: onOpenApp,
             onOpenAppStudio: onOpenAppStudio,
@@ -3378,6 +3430,7 @@ private struct ContentDetailContentView: View {
     let onForkTask: (AgentTask) -> Void
     let onCreateTask: () -> Void
     let onCreateApp: () -> Void
+    let onImportAppPackage: () -> Void
     let onOpenTask: (AgentTask) -> Void
     let onOpenApp: (WorkspaceApp) -> Void
     let onOpenAppStudio: (WorkspaceApp) -> Void
@@ -3481,12 +3534,20 @@ private struct ContentDetailContentView: View {
                 )
 
                 if WorkspaceAppStudioEntryPresentation.shouldShowNewAppEntry(for: .newTaskComposer) {
-                    Button(action: onCreateApp) {
-                        Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus.app")
+                    HStack(spacing: 8) {
+                        Button(action: onImportAppPackage) {
+                            Label("Import App", systemImage: "shippingbox")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Review an ASTRA app package")
+
+                        Button(action: onCreateApp) {
+                            Label(WorkspaceAppsPresentation.newAppActionTitle, systemImage: "plus.app")
+                        }
+                        .buttonStyle(.bordered)
+                        .help("Open App Studio")
                     }
-                    .buttonStyle(.bordered)
                     .padding(16)
-                    .help("Open App Studio")
                 }
             }
         case .workspaceHome:
@@ -3496,6 +3557,7 @@ private struct ContentDetailContentView: View {
                     taskQueue: taskQueue,
                     onCreateTask: onCreateTask,
                     onCreateApp: onCreateApp,
+                    onImportAppPackage: onImportAppPackage,
                     onOpenTask: onOpenTask,
                     onOpenApp: onOpenApp,
                     onDeleteTask: onDeleteTask,
