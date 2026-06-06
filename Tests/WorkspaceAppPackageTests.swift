@@ -477,6 +477,59 @@ struct WorkspaceAppPackageTests {
         #expect(!FileManager.default.fileExists(atPath: first.packageURL.appendingPathComponent("storage/data/full").path))
     }
 
+    @Test("package library discovers shared folder app bundles with validation state")
+    func packageLibraryDiscoversSharedFolderAppBundlesWithValidationState() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let validURL = root.appendingPathComponent("grocery.astra-app", isDirectory: true)
+        let brokenURL = root.appendingPathComponent("broken.astra-app", isDirectory: true)
+        let ignoredURL = root.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: brokenURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: ignoredURL, withIntermediateDirectories: true)
+        try Data("not a package".utf8).write(to: ignoredURL.appendingPathComponent("README.md"))
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: validURL,
+            packageID: "grocery-template",
+            version: "1.2.3"
+        )
+
+        let entries = WorkspaceAppPackageLibraryService().discoverPackages(in: root)
+
+        #expect(entries.map { $0.packageURL.lastPathComponent } == ["broken.astra-app", "grocery.astra-app"])
+        let broken = try #require(entries.first { $0.packageURL.lastPathComponent == brokenURL.lastPathComponent })
+        #expect(!broken.canInstall)
+        #expect(broken.installState == .blocked)
+        #expect(broken.packageID == nil)
+        #expect(broken.blockerMessages.contains { $0.contains("package.json") })
+
+        let valid = try #require(entries.first { $0.packageURL.lastPathComponent == validURL.lastPathComponent })
+        #expect(valid.canInstall)
+        #expect(valid.packageID == "grocery-template")
+        #expect(valid.appName == "Grocery Tracker")
+        #expect(valid.version == "1.2.3")
+        #expect(valid.installState == .needsPermissionReview)
+        #expect(valid.blockerMessages.isEmpty)
+    }
+
+    @Test("package library also discovers unpacked directory packages")
+    func packageLibraryAlsoDiscoversUnpackedDirectoryPackages() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("Grocery Template", isDirectory: true)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-template"
+        )
+
+        let entries = WorkspaceAppPackageLibraryService().discoverPackages(in: root)
+
+        #expect(entries.map(\.packageID) == ["grocery-template"])
+        #expect(entries[0].packageURL.lastPathComponent == packageURL.lastPathComponent)
+        #expect(entries[0].canInstall)
+    }
+
     static func temporaryRoot() throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("workspace-app-package-\(UUID().uuidString)", isDirectory: true)
