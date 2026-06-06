@@ -174,17 +174,21 @@ struct WorkspaceAppStudioView: View {
         }
     }
 
+    @ViewBuilder
     private var manifestSection: some View {
+        let inspector = WorkspaceAppManifestInspectorPresentationBuilder.presentation(
+            manifest: draft.manifest,
+            validationReport: draft.validationReport
+        )
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("Manifest", count: nil)
+            sectionHeader("Inspector", count: nil)
 
-            VStack(alignment: .leading, spacing: 8) {
-                manifestRow("ID", draft.manifest.app.id)
-                manifestRow("Name", draft.manifest.app.name)
-                manifestRow("Views", "\(draft.manifest.views.count)")
-                manifestRow("Actions", "\(draft.manifest.actions.count)")
-                manifestRow("Storage Tables", "\(draft.manifest.storage?.tables.count ?? 0)")
-            }
+            inspectorGroup("Identity", rows: inspector.identity)
+            inspectorGroup("Sources", rows: inspector.sources)
+            inspectorGroup("Storage", rows: inspector.storage)
+            inspectorGroup("Actions", rows: inspector.actions)
+            inspectorGroup("Automations", rows: inspector.automations)
+            inspectorGroup("Permissions", rows: inspector.permissions)
         }
     }
 
@@ -239,17 +243,53 @@ struct WorkspaceAppStudioView: View {
         )
     }
 
-    private func manifestRow(_ label: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label)
-                .font(Stanford.caption(12).weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(width: 120, alignment: .leading)
+    private func inspectorGroup(
+        _ title: String,
+        rows: [WorkspaceAppInspectorRowPresentation]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title)
+                    .font(Stanford.caption(12).weight(.semibold))
+                    .foregroundStyle(.primary)
 
-            Text(value)
-                .font(Stanford.caption(12))
-                .foregroundStyle(.primary)
+                Text("\(rows.count)")
+                    .font(Stanford.caption(11).weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            if rows.isEmpty {
+                Text("None")
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(rows) { row in
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(row.title)
+                            .font(Stanford.caption(12).weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 140, alignment: .leading)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+
+                        Text(row.detail)
+                            .font(Stanford.caption(12))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.primary.opacity(0.025))
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func regenerateDraft() {

@@ -382,6 +382,103 @@ struct WorkspaceHomePresentationTests {
         #expect(rowActions.disabledReason == "This table does not declare a primary key.")
     }
 
+    @Test("Workspace app manifest inspector exposes sources storage actions automations and permissions")
+    func workspaceAppManifestInspectorExposesManifestContract() {
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "recon", name: "Reconciliation"),
+            requirements: [
+                WorkspaceAppRequirement(
+                    id: "warehouse",
+                    contract: "tabularQuery.read",
+                    operations: ["runReadOnlyQuery"]
+                )
+            ],
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "review_items", columns: [
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                    WorkspaceAppStorageColumn(name: "status", type: "text")
+                ])
+            ]),
+            sources: [
+                WorkspaceAppSource(
+                    id: "latest_records",
+                    requirementRef: "warehouse",
+                    operation: "runReadOnlyQuery",
+                    mode: "read",
+                    query: "select * from table",
+                    tableRef: "clinical.enrollment"
+                )
+            ],
+            actions: [
+                WorkspaceAppActionSpec(
+                    id: "export_missing",
+                    type: "artifact.export",
+                    label: "Export Missing",
+                    table: "review_items",
+                    exportFormat: "csv"
+                )
+            ],
+            automations: [
+                WorkspaceAppAutomationSpec(
+                    id: "daily_refresh",
+                    type: "schedule",
+                    enabledByDefault: false,
+                    action: "export_missing"
+                )
+            ],
+            permissions: WorkspaceAppPermissions(
+                reads: ["appStorage.records", "tabularQuery.read"],
+                writes: ["task.drafts"],
+                externalWrites: ["recordProject.write"],
+                defaultMode: .approvalRequired
+            )
+        )
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        let inspector = WorkspaceAppManifestInspectorPresentationBuilder.presentation(
+            manifest: manifest,
+            validationReport: report
+        )
+
+        #expect(inspector.identity.contains {
+            $0.title == "Validation" && $0.detail == "Ready to publish"
+        })
+        #expect(inspector.sources == [
+            WorkspaceAppInspectorRowPresentation(
+                id: "latest_records",
+                title: "latest_records",
+                detail: "mode read, requirement warehouse, operation runReadOnlyQuery, table clinical.enrollment, query select * from table"
+            )
+        ])
+        #expect(inspector.storage == [
+            WorkspaceAppInspectorRowPresentation(
+                id: "review_items",
+                title: "review_items",
+                detail: "2 columns, primary key id"
+            )
+        ])
+        #expect(inspector.actions == [
+            WorkspaceAppInspectorRowPresentation(
+                id: "export_missing",
+                title: "Export Missing",
+                detail: "artifact.export, table review_items, export csv"
+            )
+        ])
+        #expect(inspector.automations == [
+            WorkspaceAppInspectorRowPresentation(
+                id: "daily_refresh",
+                title: "daily_refresh",
+                detail: "schedule, disabled until enabled, action export_missing"
+            )
+        ])
+        #expect(inspector.permissions.contains {
+            $0.title == "Mode" && $0.detail == "approvalRequired"
+        })
+        #expect(inspector.permissions.contains {
+            $0.title == "External writes" && $0.detail == "recordProject.write"
+        })
+    }
+
     @Test("Workspace app native surface renders storage backed metrics and charts")
     func workspaceAppNativeSurfaceRendersStorageBackedMetricsAndCharts() throws {
         let manifest = WorkspaceAppManifest(

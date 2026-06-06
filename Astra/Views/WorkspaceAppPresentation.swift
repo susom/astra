@@ -53,6 +53,21 @@ struct WorkspaceAppStorageRowActionsPresentation: Equatable {
     }
 }
 
+struct WorkspaceAppInspectorRowPresentation: Identifiable, Equatable {
+    var id: String
+    var title: String
+    var detail: String
+}
+
+struct WorkspaceAppManifestInspectorPresentation: Equatable {
+    var identity: [WorkspaceAppInspectorRowPresentation]
+    var sources: [WorkspaceAppInspectorRowPresentation]
+    var storage: [WorkspaceAppInspectorRowPresentation]
+    var actions: [WorkspaceAppInspectorRowPresentation]
+    var automations: [WorkspaceAppInspectorRowPresentation]
+    var permissions: [WorkspaceAppInspectorRowPresentation]
+}
+
 struct WorkspaceAppNativeSurfacePresentation: Equatable {
     var metrics: [WorkspaceAppMetricPresentation]
     var charts: [WorkspaceAppChartPresentation]
@@ -273,6 +288,152 @@ enum WorkspaceAppStorageRowActionPresentationBuilder {
             disabledReason: nil,
             input: WorkspaceAppActionInput(table: tableName)
         )
+    }
+}
+
+enum WorkspaceAppManifestInspectorPresentationBuilder {
+    static func presentation(
+        manifest: WorkspaceAppManifest,
+        validationReport: WorkspaceAppManifestValidationReport
+    ) -> WorkspaceAppManifestInspectorPresentation {
+        WorkspaceAppManifestInspectorPresentation(
+            identity: identityRows(manifest: manifest, validationReport: validationReport),
+            sources: sourceRows(manifest.sources),
+            storage: storageRows(manifest.storage),
+            actions: actionRows(manifest.actions),
+            automations: automationRows(manifest.automations),
+            permissions: permissionRows(manifest.permissions)
+        )
+    }
+
+    private static func identityRows(
+        manifest: WorkspaceAppManifest,
+        validationReport: WorkspaceAppManifestValidationReport
+    ) -> [WorkspaceAppInspectorRowPresentation] {
+        [
+            WorkspaceAppInspectorRowPresentation(
+                id: "app-id",
+                title: "App ID",
+                detail: manifest.app.id
+            ),
+            WorkspaceAppInspectorRowPresentation(
+                id: "app-name",
+                title: "Name",
+                detail: manifest.app.name
+            ),
+            WorkspaceAppInspectorRowPresentation(
+                id: "schema-version",
+                title: "Schema",
+                detail: "v\(manifest.schemaVersion)"
+            ),
+            WorkspaceAppInspectorRowPresentation(
+                id: "validation",
+                title: "Validation",
+                detail: validationReport.isValid
+                    ? "Ready to publish"
+                    : "\(validationReport.blockers.count) blockers, \(validationReport.warnings.count) warnings"
+            )
+        ]
+    }
+
+    private static func sourceRows(_ sources: [WorkspaceAppSource]) -> [WorkspaceAppInspectorRowPresentation] {
+        sources.map { source in
+            WorkspaceAppInspectorRowPresentation(
+                id: source.id,
+                title: source.id,
+                detail: joinedDetails([
+                    "mode \(source.mode)",
+                    optionalDetail("requirement", source.requirementRef),
+                    optionalDetail("operation", source.operation),
+                    optionalDetail("project", source.projectRef),
+                    optionalDetail("table", source.tableRef),
+                    optionalDetail("source", source.sourceRef),
+                    optionalDetail("query", source.query)
+                ])
+            )
+        }
+    }
+
+    private static func storageRows(_ storage: WorkspaceAppStorageSchema?) -> [WorkspaceAppInspectorRowPresentation] {
+        storage?.tables.map { table in
+            let primaryKey = table.columns.first(where: \.primaryKey)?.name ?? "none"
+            return WorkspaceAppInspectorRowPresentation(
+                id: table.name,
+                title: table.name,
+                detail: "\(table.columns.count) columns, primary key \(primaryKey)"
+            )
+        } ?? []
+    }
+
+    private static func actionRows(_ actions: [WorkspaceAppActionSpec]) -> [WorkspaceAppInspectorRowPresentation] {
+        actions.map { action in
+            WorkspaceAppInspectorRowPresentation(
+                id: action.id,
+                title: action.label?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    ? action.label!
+                    : action.id,
+                detail: joinedDetails([
+                    action.type,
+                    optionalDetail("table", action.table),
+                    optionalDetail("requirement", action.requirementRef),
+                    optionalDetail("operation", action.operation),
+                    optionalDetail("export", action.exportFormat),
+                    optionalDetail("task", action.taskTitle)
+                ])
+            )
+        }
+    }
+
+    private static func automationRows(_ automations: [WorkspaceAppAutomationSpec]) -> [WorkspaceAppInspectorRowPresentation] {
+        automations.map { automation in
+            WorkspaceAppInspectorRowPresentation(
+                id: automation.id,
+                title: automation.id,
+                detail: joinedDetails([
+                    automation.type,
+                    automation.enabledByDefault ? "enabled on import" : "disabled until enabled",
+                    optionalDetail("action", automation.action)
+                ])
+            )
+        }
+    }
+
+    private static func permissionRows(_ permissions: WorkspaceAppPermissions) -> [WorkspaceAppInspectorRowPresentation] {
+        [
+            WorkspaceAppInspectorRowPresentation(
+                id: "permission-mode",
+                title: "Mode",
+                detail: permissions.defaultMode.rawValue
+            ),
+            WorkspaceAppInspectorRowPresentation(
+                id: "permission-reads",
+                title: "Reads",
+                detail: permissions.reads.isEmpty ? "none" : permissions.reads.sorted().joined(separator: ", ")
+            ),
+            WorkspaceAppInspectorRowPresentation(
+                id: "permission-writes",
+                title: "Writes",
+                detail: permissions.writes.isEmpty ? "none" : permissions.writes.sorted().joined(separator: ", ")
+            ),
+            WorkspaceAppInspectorRowPresentation(
+                id: "permission-external-writes",
+                title: "External writes",
+                detail: permissions.externalWrites.isEmpty ? "none" : permissions.externalWrites.sorted().joined(separator: ", ")
+            )
+        ]
+    }
+
+    private static func optionalDetail(_ label: String, _ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : "\(label) \(trimmed)"
+    }
+
+    private static func joinedDetails(_ details: [String?]) -> String {
+        let values = details.compactMap { detail -> String? in
+            let trimmed = detail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return values.isEmpty ? "None" : values.joined(separator: ", ")
     }
 }
 
