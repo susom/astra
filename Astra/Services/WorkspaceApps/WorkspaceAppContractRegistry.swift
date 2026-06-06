@@ -138,6 +138,17 @@ struct WorkspaceAppContractRegistry: Equatable {
         implementations.first { $0.id == id }
     }
 
+    func including(packageImplementations: [WorkspaceAppContractImplementation]) -> WorkspaceAppContractRegistry {
+        let existingIDs = Set(implementations.map(\.id))
+        let additions = packageImplementations
+            .filter { !existingIDs.contains($0.id) }
+            .sorted { $0.id < $1.id }
+        return WorkspaceAppContractRegistry(
+            families: families,
+            implementations: implementations + additions
+        )
+    }
+
     func satisfies(
         binding: WorkspaceAppDependencyBinding,
         implementation: WorkspaceAppContractImplementation

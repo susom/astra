@@ -134,4 +134,45 @@ struct WorkspaceAppContractRegistryTests {
         #expect(resolution.isSatisfied)
         #expect(resolution.implementations.isEmpty)
     }
+
+    @Test("package declared implementations extend registry without replacing existing IDs")
+    func packageDeclaredImplementationsExtendRegistryWithoutReplacingExistingIDs() {
+        let registry = WorkspaceAppContractRegistry(implementations: [
+            WorkspaceAppContractImplementation(
+                id: "warehouse-read",
+                familyID: "tabularQuery.read",
+                provider: "installedWarehouse",
+                transport: .native,
+                operations: ["describeTable", "runReadOnlyQuery"]
+            )
+        ])
+        let extended = registry.including(packageImplementations: [
+            WorkspaceAppContractImplementation(
+                id: "warehouse-read",
+                familyID: "tabularQuery.read",
+                provider: "packageDuplicate",
+                transport: .http,
+                operations: ["describeTable", "runReadOnlyQuery"]
+            ),
+            WorkspaceAppContractImplementation(
+                id: "package-warehouse-http",
+                familyID: "tabularQuery.read",
+                provider: "packageWarehouse",
+                transport: .http,
+                operations: ["describeTable", "runReadOnlyQuery"]
+            )
+        ])
+        let requirement = WorkspaceAppRequirement(
+            id: "warehouse",
+            contract: "tabularQuery.read",
+            operations: ["describeTable", "runReadOnlyQuery"],
+            providerRequired: "packageWarehouse"
+        )
+
+        let resolution = extended.resolve(requirement)
+
+        #expect(extended.implementation(id: "warehouse-read")?.provider == "installedWarehouse")
+        #expect(resolution.implementations.map(\.id) == ["package-warehouse-http"])
+        #expect(resolution.selectedImplementation?.transport == .http)
+    }
 }

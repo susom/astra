@@ -207,6 +207,77 @@ struct WorkspaceAppPackageTests {
         #expect(review.dependencyMappings[0].candidateImplementations.isEmpty)
     }
 
+    @Test("package import review includes package declared implementation descriptors")
+    func packageImportReviewIncludesPackageDeclaredImplementationDescriptors() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("warehouse.astra-app", isDirectory: true)
+        var manifest = Self.groceryManifest()
+        manifest.requirements = [
+            WorkspaceAppRequirement(
+                id: "sourceWarehouse",
+                contract: "tabularQuery.read",
+                operations: ["describeTable", "runReadOnlyQuery"],
+                providerRequired: "warehouseApi"
+            )
+        ]
+        manifest.sources[0].requirementRef = "sourceWarehouse"
+        manifest.actions[0].requirementRef = "sourceWarehouse"
+        let descriptor = WorkspaceAppContractImplementation(
+            id: "warehouse-api-http",
+            familyID: "tabularQuery.read",
+            provider: "warehouseApi",
+            transport: .http,
+            operations: ["describeTable", "runReadOnlyQuery"],
+            dataAccess: ["externalService"]
+        )
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: manifest,
+            to: packageURL,
+            implementationDescriptors: [descriptor]
+        )
+
+        let review = WorkspaceAppPackageImportReviewer.review(packageURL: packageURL)
+
+        #expect(review.report.canInstall)
+        #expect(review.report.package?.implementationDescriptors == [descriptor])
+        #expect(review.report.installState == .needsPermissionReview)
+        #expect(!review.hasUnresolvedRequiredDependencies)
+        #expect(review.dependencyMappings.count == 1)
+        #expect(review.dependencyMappings[0].selectedImplementation?.id == "warehouse-api-http")
+        #expect(review.dependencyMappings[0].selectedImplementation?.transport == .http)
+    }
+
+    @Test("package validation blocks invalid implementation descriptors")
+    func packageValidationBlocksInvalidImplementationDescriptors() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("invalid-descriptor.astra-app", isDirectory: true)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            implementationDescriptors: [
+                WorkspaceAppContractImplementation(
+                    id: "invalid/descriptor",
+                    familyID: "missing.family",
+                    provider: "",
+                    transport: .cli,
+                    operations: []
+                )
+            ]
+        )
+
+        let report = WorkspaceAppPackageService().validatePackage(at: packageURL)
+
+        #expect(!report.canInstall)
+        #expect(report.blockers.contains {
+            $0.path == "/package.json/implementationDescriptors/0/id" && $0.message.contains("portable")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/package.json/implementationDescriptors/0/familyID" && $0.message.contains("unknown contract family")
+        })
+    }
+
     @MainActor
     @Test("package import installs forked app with package provenance")
     func packageImportInstallsForkedAppWithPackageProvenance() throws {

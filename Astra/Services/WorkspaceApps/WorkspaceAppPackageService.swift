@@ -31,6 +31,62 @@ struct WorkspaceAppPackageManifest: Codable, Sendable, Equatable {
     var createdAt: Date
     var author: String?
     var requiredContracts: [WorkspaceAppPackageContractRequirement]
+    var implementationDescriptors: [WorkspaceAppContractImplementation]
+
+    enum CodingKeys: String, CodingKey {
+        case packageID
+        case appID
+        case appName
+        case version
+        case minimumASTRAVersion
+        case sourceManifestDigest
+        case exportMode
+        case createdAt
+        case author
+        case requiredContracts
+        case implementationDescriptors
+    }
+
+    init(
+        packageID: String,
+        appID: String,
+        appName: String,
+        version: String,
+        minimumASTRAVersion: String,
+        sourceManifestDigest: String,
+        exportMode: WorkspaceAppPackageExportMode,
+        createdAt: Date,
+        author: String?,
+        requiredContracts: [WorkspaceAppPackageContractRequirement],
+        implementationDescriptors: [WorkspaceAppContractImplementation] = []
+    ) {
+        self.packageID = packageID
+        self.appID = appID
+        self.appName = appName
+        self.version = version
+        self.minimumASTRAVersion = minimumASTRAVersion
+        self.sourceManifestDigest = sourceManifestDigest
+        self.exportMode = exportMode
+        self.createdAt = createdAt
+        self.author = author
+        self.requiredContracts = requiredContracts
+        self.implementationDescriptors = implementationDescriptors
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        packageID = try container.decode(String.self, forKey: .packageID)
+        appID = try container.decode(String.self, forKey: .appID)
+        appName = try container.decode(String.self, forKey: .appName)
+        version = try container.decode(String.self, forKey: .version)
+        minimumASTRAVersion = try container.decode(String.self, forKey: .minimumASTRAVersion)
+        sourceManifestDigest = try container.decode(String.self, forKey: .sourceManifestDigest)
+        exportMode = try container.decode(WorkspaceAppPackageExportMode.self, forKey: .exportMode)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        author = try container.decodeIfPresent(String.self, forKey: .author)
+        requiredContracts = try container.decodeIfPresent([WorkspaceAppPackageContractRequirement].self, forKey: .requiredContracts) ?? []
+        implementationDescriptors = try container.decodeIfPresent([WorkspaceAppContractImplementation].self, forKey: .implementationDescriptors) ?? []
+    }
 }
 
 struct WorkspaceAppPackageContractRequirement: Codable, Sendable, Equatable {
@@ -162,7 +218,8 @@ struct WorkspaceAppPackageService {
         mode: WorkspaceAppPackageExportMode = .templateOnly,
         appStorageDatabaseURL: URL? = nil,
         author: String? = nil,
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        implementationDescriptors: [WorkspaceAppContractImplementation] = []
     ) throws -> URL {
         let report = WorkspaceAppManifestValidator.validate(manifest)
         guard report.isValid else {
@@ -183,7 +240,8 @@ struct WorkspaceAppPackageService {
             exportMode: mode,
             createdAt: createdAt,
             author: author,
-            requiredContracts: manifest.requirements.map(Self.packageRequirement)
+            requiredContracts: manifest.requirements.map(Self.packageRequirement),
+            implementationDescriptors: implementationDescriptors
         )
 
         try fileManager.createDirectory(at: packageURL, withIntermediateDirectories: true)
@@ -257,6 +315,7 @@ struct WorkspaceAppPackageService {
             if package.sourceManifestDigest != digest(for: packageURL.appendingPathComponent("manifest.json")) {
                 issues.append(blocker("/package.json/sourceManifestDigest", "Package manifest digest does not match manifest.json."))
             }
+            validateImplementationDescriptors(package.implementationDescriptors, issues: &issues)
         }
         if let declaredChecksums {
             validateChecksums(declaredChecksums, packageURL: packageURL, issues: &issues)
@@ -623,6 +682,47 @@ struct WorkspaceAppPackageService {
         }
     }
 
+    private func validateImplementationDescriptors(
+        _ descriptors: [WorkspaceAppContractImplementation],
+        issues: inout [WorkspaceAppPackageValidationReport.Issue]
+    ) {
+        let registry = WorkspaceAppContractRegistry()
+        var seen = Set<String>()
+        for (index, descriptor) in descriptors.enumerated() {
+            let path = "/package.json/implementationDescriptors/\(index)"
+            let id = descriptor.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if id.isEmpty {
+                issues.append(blocker("\(path)/id", "Implementation descriptor ID is required."))
+            } else if !isPortableRelativePath(id) || id.contains("/") {
+                issues.append(blocker("\(path)/id", "Implementation descriptor ID must be portable."))
+            } else if !seen.insert(id).inserted {
+                issues.append(blocker("\(path)/id", "Implementation descriptor ID '\(id)' is duplicated."))
+            }
+            guard let family = registry.family(id: descriptor.familyID) else {
+                issues.append(blocker("\(path)/familyID", "Implementation descriptor references unknown contract family '\(descriptor.familyID)'."))
+                continue
+            }
+            let supportedOperations = Set(family.operations.map(\.name))
+            let descriptorOperations = Set(descriptor.operations)
+            if descriptor.operations.isEmpty {
+                issues.append(blocker("\(path)/operations", "Implementation descriptor must declare supported operations."))
+            }
+            let unsupported = descriptor.operations.filter { !supportedOperations.contains($0) }
+            if !unsupported.isEmpty {
+                issues.append(blocker("\(path)/operations", "Implementation descriptor declares unsupported operations: \(unsupported.joined(separator: ", "))."))
+            }
+            if descriptor.provider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issues.append(blocker("\(path)/provider", "Implementation descriptor provider is required."))
+            }
+            if descriptor.transport != .native,
+               descriptorOperations.contains(where: { operationName in
+                   family.operations.first { $0.name == operationName }?.effect == .externalWrite
+               }) {
+                issues.append(warning("\(path)/transport", "Package-declared \(descriptor.transport.rawValue) external writes require ASTRA approval and are not executed by the current runtime."))
+            }
+        }
+    }
+
     private func validateNoForbiddenPortableContent(
         packageURL: URL,
         issues: inout [WorkspaceAppPackageValidationReport.Issue]
@@ -681,6 +781,7 @@ struct WorkspaceAppPackageService {
             return .blocked
         }
         let registry = WorkspaceAppContractRegistry()
+            .including(packageImplementations: package?.implementationDescriptors ?? [])
         let unresolvedRequired = registry.resolveAll(manifest.requirements).contains { !$0.isSatisfied }
         if unresolvedRequired {
             return .needsDependencyMapping
@@ -724,5 +825,9 @@ struct WorkspaceAppPackageService {
 
     private func blocker(_ path: String, _ message: String) -> WorkspaceAppPackageValidationReport.Issue {
         WorkspaceAppPackageValidationReport.Issue(severity: .blocker, path: path, message: message)
+    }
+
+    private func warning(_ path: String, _ message: String) -> WorkspaceAppPackageValidationReport.Issue {
+        WorkspaceAppPackageValidationReport.Issue(severity: .warning, path: path, message: message)
     }
 }

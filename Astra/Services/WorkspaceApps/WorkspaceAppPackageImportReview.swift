@@ -42,9 +42,10 @@ struct WorkspaceAppPackageImportReview: Identifiable, Equatable {
         self.id = id
         self.packageURL = packageURL
         self.report = report
+        let effectiveRegistry = registry.including(packageImplementations: report.package?.implementationDescriptors ?? [])
         self.dependencyMappings = Self.buildDependencyMappings(
             requirements: report.package?.requiredContracts ?? [],
-            registry: registry
+            registry: effectiveRegistry
         )
     }
 
