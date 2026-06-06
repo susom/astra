@@ -245,6 +245,7 @@ enum WorkspaceAppManifestValidator {
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
     ) {
         var seen = Set<String>()
+        var actionIDs = Set<String>()
         for (index, action) in actions.enumerated() {
             let path = "/actions/\(index)"
             validateUniqueIdentifier(
@@ -254,6 +255,9 @@ enum WorkspaceAppManifestValidator {
                 seen: &seen,
                 issues: &issues
             )
+            if !action.id.isEmpty {
+                actionIDs.insert(action.id)
+            }
             validateIdentifier(action.type, path: "\(path)/type", label: "Action type", issues: &issues)
             if let requirementRef = action.requirementRef,
                !requirementIDs.contains(requirementRef) {
@@ -271,6 +275,22 @@ enum WorkspaceAppManifestValidator {
             if action.type == "task.createDraft",
                action.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 issues.append(blocker("\(path)/taskGoal", "Task draft action must declare a task goal."))
+            }
+        }
+
+        for (index, action) in actions.enumerated() where action.type == "pipeline.run" {
+            let path = "/actions/\(index)"
+            if action.steps.isEmpty {
+                issues.append(blocker("\(path)/steps", "Pipeline action must declare at least one step."))
+            }
+            for (stepIndex, stepID) in action.steps.enumerated() {
+                let stepPath = "\(path)/steps/\(stepIndex)"
+                validateIdentifier(stepID, path: stepPath, label: "Pipeline step action ID", issues: &issues)
+                if stepID == action.id {
+                    issues.append(blocker(stepPath, "Pipeline action cannot include itself as a step."))
+                } else if !actionIDs.contains(stepID) {
+                    issues.append(blocker(stepPath, "Pipeline step references unknown action '\(stepID)'."))
+                }
             }
         }
     }

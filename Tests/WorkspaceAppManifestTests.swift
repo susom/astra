@@ -106,6 +106,50 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid pipeline step references")
+    func validationRejectsInvalidPipelineStepReferences() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(id: "refresh", type: "pipeline.run", label: "Refresh", steps: ["refresh", "missing"]),
+            WorkspaceAppActionSpec(id: "list_items", type: "appStorage.query", label: "List", table: "review_items")
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/steps/0" && $0.message.contains("cannot include itself")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/steps/1" && $0.message.contains("unknown action")
+        })
+    }
+
+    @Test("manifest decoding keeps legacy actions without pipeline steps compatible")
+    func manifestDecodingKeepsLegacyActionsWithoutPipelineStepsCompatible() throws {
+        let json = """
+        {
+          "schemaVersion": 1,
+          "app": {"id": "legacy", "name": "Legacy", "icon": "square.grid.2x2", "description": "", "tags": [], "archetypes": []},
+          "requirements": [],
+          "storage": null,
+          "sources": [],
+          "views": [],
+          "actions": [
+            {"id": "legacy_action", "type": "task.createDraft", "label": "Create", "taskGoal": "Do work"}
+          ],
+          "automations": [],
+          "permissions": {"reads": [], "writes": [], "externalWrites": [], "defaultMode": "draftOnly"}
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(WorkspaceAppManifest.self, from: Data(json.utf8))
+
+        #expect(manifest.actions.count == 1)
+        #expect(manifest.actions[0].steps.isEmpty)
+        #expect(WorkspaceAppManifestValidator.validate(manifest).isValid)
+    }
+
     @Test("manifest validation rejects artifact exports with unknown table or format")
     func validationRejectsInvalidArtifactExportBindings() {
         var manifest = Self.reconciliationManifest()

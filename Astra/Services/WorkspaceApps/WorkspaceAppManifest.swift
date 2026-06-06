@@ -233,6 +233,20 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var exportFormat: String?
     var taskTitle: String?
     var taskGoal: String?
+    var steps: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case requirementRef
+        case operation
+        case table
+        case exportFormat
+        case taskTitle
+        case taskGoal
+        case steps
+    }
 
     init(
         id: String,
@@ -243,7 +257,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         table: String? = nil,
         exportFormat: String? = nil,
         taskTitle: String? = nil,
-        taskGoal: String? = nil
+        taskGoal: String? = nil,
+        steps: [String] = []
     ) {
         self.id = id
         self.type = type
@@ -254,6 +269,21 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.exportFormat = exportFormat
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
+        self.steps = steps
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(String.self, forKey: .type)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
+        requirementRef = try container.decodeIfPresent(String.self, forKey: .requirementRef)
+        operation = try container.decodeIfPresent(String.self, forKey: .operation)
+        table = try container.decodeIfPresent(String.self, forKey: .table)
+        exportFormat = try container.decodeIfPresent(String.self, forKey: .exportFormat)
+        taskTitle = try container.decodeIfPresent(String.self, forKey: .taskTitle)
+        taskGoal = try container.decodeIfPresent(String.self, forKey: .taskGoal)
+        steps = try container.decodeIfPresent([String].self, forKey: .steps) ?? []
     }
 }
 

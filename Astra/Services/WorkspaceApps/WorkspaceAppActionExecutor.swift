@@ -8,6 +8,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingRecord
     case missingPrimaryKey(String)
     case missingTaskGoal
+    case missingPipelineSteps(String)
     case unsupportedExportFormat(String)
     case permissionDenied(String)
     case storageFailed(String)
@@ -26,6 +27,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app storage table '\(table)' must declare a primary key for this action."
         case .missingTaskGoal:
             "Workspace app task action requires a task goal."
+        case .missingPipelineSteps(let actionID):
+            "Workspace app pipeline action '\(actionID)' must declare at least one step."
         case .unsupportedExportFormat(let format):
             "Workspace app artifact export format '\(format)' is not supported."
         case .permissionDenied(let message):
@@ -187,6 +190,7 @@ struct WorkspaceAppActionExecutor {
                 workspace: workspace,
                 manifest: manifest,
                 input: input,
+                run: run,
                 modelContext: modelContext
             )
             run.linkedTaskID = result.linkedTaskID
@@ -275,6 +279,7 @@ struct WorkspaceAppActionExecutor {
         workspace: Workspace,
         manifest: WorkspaceAppManifest,
         input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
         modelContext: ModelContext
     ) throws -> (
         rows: [[String: WorkspaceAppStorageValue]],
@@ -363,9 +368,78 @@ struct WorkspaceAppActionExecutor {
                 modelContext: modelContext
             )
             return ([], "Created draft task '\(task.title)'.", task.id, nil)
+        case "pipeline.run":
+            return try executePipeline(
+                action: action,
+                app: app,
+                workspace: workspace,
+                manifest: manifest,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
         }
+    }
+
+    private func executePipeline(
+        action: WorkspaceAppActionSpec,
+        app: WorkspaceApp,
+        workspace: Workspace,
+        manifest: WorkspaceAppManifest,
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        guard !action.steps.isEmpty else {
+            throw WorkspaceAppActionExecutionError.missingPipelineSteps(action.id)
+        }
+
+        var rows: [[String: WorkspaceAppStorageValue]] = []
+        var summaries: [String] = []
+        var linkedTaskID: UUID?
+        var linkedArtifactPath: String?
+
+        for stepID in action.steps {
+            let step = try actionSpec(actionID: stepID, manifest: manifest)
+            try enforcePermission(for: step, app: app, input: input)
+            let result = try execute(
+                action: step,
+                app: app,
+                workspace: workspace,
+                manifest: manifest,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.pipeline.step.completed",
+                payload: [
+                    "pipelineID": .text(action.id),
+                    "stepID": .text(stepID),
+                    "summary": .text(result.outputSummary)
+                ],
+                modelContext: modelContext
+            )
+            rows = result.rows
+            summaries.append("\(stepID): \(result.outputSummary)")
+            linkedTaskID = result.linkedTaskID ?? linkedTaskID
+            linkedArtifactPath = result.linkedArtifactPath ?? linkedArtifactPath
+        }
+
+        return (
+            rows,
+            "Pipeline '\(action.id)' completed \(action.steps.count) steps. " + summaries.joined(separator: " "),
+            linkedTaskID,
+            linkedArtifactPath
+        )
     }
 
     private func primaryKeyColumn(
@@ -532,11 +606,11 @@ struct WorkspaceAppActionExecutor {
 
     private func effect(for actionType: String) -> WorkspaceAppContractEffect {
         switch actionType {
-        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy":
+        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run":
             .read
         case "appStorage.insert", "appStorage.update", "notification.show", "task.createDraft":
             .localWrite
-        case "capability.write", "task.createAndRun", "pipeline.run":
+        case "capability.write", "task.createAndRun":
             .externalWrite
         case "appStorage.delete":
             .destructive

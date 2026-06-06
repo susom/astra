@@ -365,7 +365,8 @@ enum WorkspaceAppStudioBuilder {
                 WorkspaceAppViewSpec(id: "exceptions", type: "reviewQueue", title: "Exceptions", table: "review_items")
             ],
             actions: [
-                WorkspaceAppActionSpec(id: "refresh", type: "pipeline.run", label: "Refresh"),
+                WorkspaceAppActionSpec(id: "list_review_items", type: "appStorage.query", label: "List Review Items", table: "review_items"),
+                WorkspaceAppActionSpec(id: "refresh", type: "pipeline.run", label: "Refresh", steps: ["list_review_items"]),
                 WorkspaceAppActionSpec(
                     id: "create_review_task",
                     type: "task.createDraft",
@@ -439,7 +440,8 @@ enum WorkspaceAppStudioBuilder {
                 WorkspaceAppViewSpec(id: "approval_queue", type: "reviewQueue", title: "Approval Queue", table: "pipeline_items")
             ],
             actions: [
-                WorkspaceAppActionSpec(id: "run_pipeline", type: "pipeline.run", label: "Run Pipeline"),
+                WorkspaceAppActionSpec(id: "list_pipeline_items", type: "appStorage.query", label: "List Pipeline Items", table: "pipeline_items"),
+                WorkspaceAppActionSpec(id: "run_pipeline", type: "pipeline.run", label: "Run Pipeline", steps: ["list_pipeline_items"]),
                 WorkspaceAppActionSpec(
                     id: "create_followup_task",
                     type: "task.createDraft",

@@ -257,6 +257,49 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("pipeline actions execute declared steps in one app run")
+    func pipelineActionsExecuteDeclaredStepsInOneAppRun() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        let result = try WorkspaceAppActionExecutor().execute(
+            actionID: "exportPipeline",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+
+        #expect(result.run.status == .completed)
+        #expect(result.run.actionID == "exportPipeline")
+        #expect(result.run.linkedArtifactPath?.hasSuffix("/.astra/apps/grocery-actions/exports/items.csv") == true)
+        #expect(result.outputSummary.contains("Pipeline 'exportPipeline' completed 2 steps."))
+        #expect(result.outputSummary.contains("listItems: Read 1 records from items."))
+        #expect(result.outputSummary.contains("exportItems: Exported items.csv."))
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == result.run.id }
+        #expect(events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("listItems") })
+        #expect(events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("exportItems") })
+        #expect(events.contains { $0.type == "workspaceApp.artifact.exported" && $0.payload.contains("items.csv") })
+    }
+
+    @MainActor
     @Test("read-only apps block local write actions and record blocked runs")
     func readOnlyAppsBlockLocalWriteActionsAndRecordBlockedRuns() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
@@ -412,7 +455,8 @@ struct WorkspaceAppActionExecutorTests {
                     type: "appStorage.query",
                     label: "List Items",
                     requirementRef: "localRecords",
-                    operation: "queryRecords"
+                    operation: "queryRecords",
+                    table: "items"
                 ),
                 WorkspaceAppActionSpec(
                     id: "updateItem",
@@ -439,6 +483,12 @@ struct WorkspaceAppActionExecutorTests {
                     label: "Export Items",
                     table: "items",
                     exportFormat: "csv"
+                ),
+                WorkspaceAppActionSpec(
+                    id: "exportPipeline",
+                    type: "pipeline.run",
+                    label: "Export Pipeline",
+                    steps: ["listItems", "exportItems"]
                 )
             ],
             permissions: WorkspaceAppPermissions(
