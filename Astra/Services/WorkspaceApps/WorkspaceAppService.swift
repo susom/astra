@@ -7,6 +7,9 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
     case emptyWorkspacePath
     case encodeFailed(String)
     case storageFailed(String)
+    case missingDependencyBinding(String)
+    case missingContractImplementation(String)
+    case incompatibleContractImplementation(requirementID: String, implementationID: String)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +22,12 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
             return "Could not encode workspace app manifest: \(message)"
         case .storageFailed(let message):
             return "Could not initialize workspace app storage: \(message)"
+        case .missingDependencyBinding(let requirementID):
+            return "Workspace app dependency requirement '\(requirementID)' was not found."
+        case .missingContractImplementation(let implementationID):
+            return "Workspace app contract implementation '\(implementationID)' was not found."
+        case .incompatibleContractImplementation(let requirementID, let implementationID):
+            return "Contract implementation '\(implementationID)' does not satisfy requirement '\(requirementID)'."
         }
     }
 }
@@ -201,6 +210,73 @@ struct WorkspaceAppService {
             "resource": "workspace_app",
             "result": "refreshed",
             "app_id": app.logicalID,
+            "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
+        ])
+    }
+
+    @MainActor
+    func dependencyBindings(
+        for app: WorkspaceApp,
+        modelContext: ModelContext
+    ) throws -> [WorkspaceAppDependencyBinding] {
+        let appID = app.id
+        let descriptor = FetchDescriptor<WorkspaceAppDependencyBinding>(
+            predicate: #Predicate<WorkspaceAppDependencyBinding> { binding in
+                binding.appID == appID
+            },
+            sortBy: [SortDescriptor(\.requirementID)]
+        )
+        return try modelContext.fetch(descriptor)
+    }
+
+    @MainActor
+    func remapDependencyBinding(
+        app: WorkspaceApp,
+        requirementID: String,
+        implementationID: String?,
+        workspace: Workspace?,
+        modelContext: ModelContext,
+        now: Date = Date()
+    ) throws {
+        let bindings = try dependencyBindings(for: app, modelContext: modelContext)
+        guard let binding = bindings.first(where: { $0.requirementID == requirementID }) else {
+            throw WorkspaceAppServiceError.missingDependencyBinding(requirementID)
+        }
+
+        if let implementationID {
+            guard let implementation = contractRegistry.implementation(id: implementationID) else {
+                throw WorkspaceAppServiceError.missingContractImplementation(implementationID)
+            }
+            guard contractRegistry.satisfies(binding: binding, implementation: implementation) else {
+                throw WorkspaceAppServiceError.incompatibleContractImplementation(
+                    requirementID: requirementID,
+                    implementationID: implementationID
+                )
+            }
+            binding.status = .mapped
+            binding.implementationID = implementation.id
+            binding.provider = implementation.provider
+            binding.transport = implementation.transport
+        } else {
+            binding.status = binding.optional ? .optionalMissing : .missingRequired
+            binding.implementationID = nil
+            binding.provider = nil
+            binding.transport = nil
+        }
+
+        binding.updatedAt = now
+        app.dependencyStatus = dependencyStatus(for: bindings)
+        app.updatedAt = now
+        workspace?.updatedAt = now
+        try modelContext.save()
+        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
+
+        AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+            "resource": "workspace_app_dependency_binding",
+            "result": "remapped",
+            "app_id": app.logicalID,
+            "requirement_id": requirementID,
+            "implementation_id": implementationID ?? "none",
             "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
         ])
     }

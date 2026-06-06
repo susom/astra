@@ -308,6 +308,74 @@ struct WorkspaceAppManifestTests {
     }
 
     @MainActor
+    @Test("service remaps dependency bindings without editing the app manifest")
+    func serviceRemapsDependencyBindingsWithoutEditingManifest() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-remap-dependency-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let workspace = Workspace(name: "Apps", primaryPath: root.path)
+        context.insert(workspace)
+
+        let manifest = Self.reconciliationManifest()
+        let creatingService = WorkspaceAppService(
+            contractRegistry: WorkspaceAppContractRegistry(implementations: [])
+        )
+        let result = try creatingService.createApp(
+            manifest: manifest,
+            in: workspace,
+            modelContext: context
+        )
+        let originalManifestData = try Data(contentsOf: result.manifestURL)
+
+        let remappingService = WorkspaceAppService()
+        #expect(throws: WorkspaceAppServiceError.incompatibleContractImplementation(
+            requirementID: "sourceWarehouse",
+            implementationID: "redcap-read-task-backed"
+        )) {
+            try remappingService.remapDependencyBinding(
+                app: result.app,
+                requirementID: "sourceWarehouse",
+                implementationID: "redcap-read-task-backed",
+                workspace: workspace,
+                modelContext: context
+            )
+        }
+
+        try remappingService.remapDependencyBinding(
+            app: result.app,
+            requirementID: "sourceWarehouse",
+            implementationID: "bigquery-read-task-backed",
+            workspace: workspace,
+            modelContext: context
+        )
+        #expect(result.app.dependencyStatus == .missingRequired)
+
+        try remappingService.remapDependencyBinding(
+            app: result.app,
+            requirementID: "targetRecords",
+            implementationID: "redcap-read-task-backed",
+            workspace: workspace,
+            modelContext: context
+        )
+        #expect(result.app.dependencyStatus == .ready)
+        #expect(try Data(contentsOf: result.manifestURL) == originalManifestData)
+
+        let bindings = try remappingService.dependencyBindings(for: result.app, modelContext: context)
+        #expect(bindings.count == 2)
+        #expect(bindings.allSatisfy { $0.status == .mapped })
+        #expect(bindings.first { $0.requirementID == "sourceWarehouse" }?.implementationID == "bigquery-read-task-backed")
+        #expect(bindings.first { $0.requirementID == "targetRecords" }?.implementationID == "redcap-read-task-backed")
+    }
+
+    @MainActor
     @Test("service records app open and refresh lifecycle timestamps")
     func serviceRecordsAppOpenAndRefreshLifecycleTimestamps() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())

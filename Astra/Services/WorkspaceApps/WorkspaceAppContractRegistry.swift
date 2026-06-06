@@ -134,6 +134,19 @@ struct WorkspaceAppContractRegistry: Equatable {
         families.first { $0.id == id }
     }
 
+    func implementation(id: String) -> WorkspaceAppContractImplementation? {
+        implementations.first { $0.id == id }
+    }
+
+    func satisfies(
+        binding: WorkspaceAppDependencyBinding,
+        implementation: WorkspaceAppContractImplementation
+    ) -> Bool {
+        guard implementation.familyID == binding.contract else { return false }
+        let available = Set(implementation.operations)
+        return Set(binding.operations).isSubset(of: available)
+    }
+
     func missingOperations(
         for requirement: WorkspaceAppRequirement,
         implementation: WorkspaceAppContractImplementation
