@@ -77,6 +77,49 @@ struct WorkspaceAppPackageTests {
         #expect(report.package?.exportMode == .templatePlusSeedData)
     }
 
+    @Test("full app export writes records and surfaces a sensitive data warning")
+    func fullAppExportWritesRecordsAndSurfacesSensitiveDataWarning() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery-full.astra-app", isDirectory: true)
+        let databaseURL = try Self.groceryDatabase(in: root)
+
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-full",
+            mode: .fullAppExport,
+            appStorageDatabaseURL: databaseURL
+        )
+
+        let dataURL = packageURL.appendingPathComponent("storage/data/full/items.jsonl")
+        let exportsURL = packageURL.appendingPathComponent("storage/data/exports.json")
+        #expect(FileManager.default.fileExists(atPath: dataURL.path))
+
+        let exports = try JSONDecoder().decode(
+            [WorkspaceAppPackageDataExport].self,
+            from: Data(contentsOf: exportsURL)
+        )
+        #expect(exports == [
+            WorkspaceAppPackageDataExport(
+                table: "items",
+                policy: .full,
+                path: "storage/data/full/items.jsonl",
+                rowCount: 2
+            )
+        ])
+
+        let review = WorkspaceAppPackageImportReviewer.review(packageURL: packageURL)
+
+        #expect(review.canInstall)
+        #expect(review.report.package?.exportMode == .fullAppExport)
+        #expect(review.report.warnings.contains {
+            $0.path == "/package.json/exportMode"
+                && $0.message.contains("Full app export")
+                && $0.message.contains("sensitive data")
+        })
+    }
+
     @Test("record export modes require an app storage database")
     func recordExportModesRequireStorageDatabase() throws {
         let root = try Self.temporaryRoot()

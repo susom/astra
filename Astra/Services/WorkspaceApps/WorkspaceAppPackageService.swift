@@ -652,6 +652,12 @@ struct WorkspaceAppPackageService {
     ) {
         guard let package else { return }
         let exports = decodeDataExports(at: packageURL) ?? []
+        if package.exportMode == .fullAppExport {
+            issues.append(warning(
+                "/package.json/exportMode",
+                "Full app export includes app-owned records and may contain sensitive data. Review package data before import."
+            ))
+        }
         if package.exportMode == .templateOnly {
             if !exports.isEmpty {
                 issues.append(blocker("/storage/data/exports.json", "Template-only packages must not include app records."))
