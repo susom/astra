@@ -87,6 +87,25 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects task draft actions without a goal")
+    func validationRejectsTaskDraftActionsWithoutGoal() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "create_review",
+                type: "task.createDraft",
+                label: "Create Review Task"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/taskGoal" && $0.message.contains("task goal")
+        })
+    }
+
     @Test("manifest encoding preserves native widget specs")
     func manifestEncodingPreservesNativeWidgetSpecs() throws {
         let manifest = Self.reconciliationManifest()

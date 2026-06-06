@@ -53,6 +53,39 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("task create draft actions create linked AgentTask drafts")
+    func taskCreateDraftActionsCreateLinkedAgentTaskDrafts() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let result = try WorkspaceAppActionExecutor().execute(
+            actionID: "createReviewTask",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+
+        let task = try #require(try fixture.context.fetch(FetchDescriptor<AgentTask>()).first {
+            $0.id == result.run.linkedTaskID
+        })
+        #expect(task.status == .draft)
+        #expect(task.workspace?.id == fixture.workspace.id)
+        #expect(task.title == "Review grocery records")
+        #expect(task.goal == "Review the grocery records and propose the next shopping task.")
+        #expect(task.inputs.contains("Created from Workspace App 'Grocery Actions' (grocery-actions)."))
+        #expect(result.outputSummary == "Created draft task 'Review grocery records'.")
+        #expect(result.run.status == .completed)
+        #expect(result.run.linkedTaskID == task.id)
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+        #expect(events.contains { event in
+            event.type == "workspaceApp.task.created" &&
+                event.payload.contains(task.id.uuidString)
+        })
+    }
+
+    @MainActor
     @Test("read-only apps block local write actions and record blocked runs")
     func readOnlyAppsBlockLocalWriteActionsAndRecordBlockedRuns() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
@@ -90,6 +123,30 @@ struct WorkspaceAppActionExecutorTests {
 
         let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
         #expect(events.contains { $0.type == "workspaceApp.action.blocked" })
+    }
+
+    @MainActor
+    @Test("read-only apps block task draft actions")
+    func readOnlyAppsBlockTaskDraftActions() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        #expect(throws: WorkspaceAppActionExecutionError.permissionDenied(
+            "Read-only workspace apps cannot perform local write action 'createReviewTask'."
+        )) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "createReviewTask",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                modelContext: fixture.context
+            )
+        }
+
+        #expect(try fixture.context.fetch(FetchDescriptor<AgentTask>()).isEmpty)
+        let run = try #require(try fixture.context.fetch(FetchDescriptor<WorkspaceAppRun>()).first)
+        #expect(run.status == .blocked)
+        #expect(run.linkedTaskID == nil)
     }
 
     @MainActor
@@ -185,6 +242,13 @@ struct WorkspaceAppActionExecutorTests {
                     label: "List Items",
                     requirementRef: "localRecords",
                     operation: "queryRecords"
+                ),
+                WorkspaceAppActionSpec(
+                    id: "createReviewTask",
+                    type: "task.createDraft",
+                    label: "Create Review Task",
+                    taskTitle: "Review grocery records",
+                    taskGoal: "Review the grocery records and propose the next shopping task."
                 )
             ],
             permissions: WorkspaceAppPermissions(

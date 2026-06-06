@@ -253,6 +253,10 @@ enum WorkspaceAppManifestValidator {
                !requirementIDs.contains(requirementRef) {
                 issues.append(blocker("\(path)/requirementRef", "Action references unknown requirement '\(requirementRef)'."))
             }
+            if action.type == "task.createDraft",
+               action.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                issues.append(blocker("\(path)/taskGoal", "Task draft action must declare a task goal."))
+            }
         }
     }
 

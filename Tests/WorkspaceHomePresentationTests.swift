@@ -198,6 +198,13 @@ struct WorkspaceHomePresentationTests {
             actions: [
                 WorkspaceAppActionSpec(id: "listItems", type: "appStorage.query", label: "List Items"),
                 WorkspaceAppActionSpec(id: "addItem", type: "appStorage.insert", label: "Add Item"),
+                WorkspaceAppActionSpec(
+                    id: "review",
+                    type: "task.createDraft",
+                    label: "Create Review Task",
+                    taskTitle: "Review items",
+                    taskGoal: "Review the current grocery records."
+                ),
                 WorkspaceAppActionSpec(id: "submit", type: "capability.write", label: "Submit")
             ]
         )
@@ -215,16 +222,20 @@ struct WorkspaceHomePresentationTests {
             storageTables: storageTables
         )
 
-        #expect(actions.count == 3)
+        #expect(actions.count == 4)
         #expect(actions[0].id == "listItems")
         #expect(actions[0].isEnabled)
         #expect(actions[0].input.table == "items")
         #expect(actions[1].id == "addItem")
         #expect(actions[1].isEnabled)
         #expect(actions[1].input.table == "items")
-        #expect(actions[2].id == "submit")
-        #expect(!actions[2].isEnabled)
-        #expect(actions[2].disabledReason == "This action type is not wired into the app renderer yet.")
+        #expect(actions[2].id == "review")
+        #expect(actions[2].isEnabled)
+        #expect(actions[2].input.taskTitle == "Review items")
+        #expect(actions[2].input.taskGoal == "Review the current grocery records.")
+        #expect(actions[3].id == "submit")
+        #expect(!actions[3].isEnabled)
+        #expect(actions[3].disabledReason == "This action type is not wired into the app renderer yet.")
 
         let table = try #require(manifest.storage?.tables.first)
         let fields = WorkspaceAppStorageRecordDraftBuilder.fields(for: table)
@@ -361,6 +372,7 @@ struct WorkspaceHomePresentationTests {
             view.widgets.contains { $0.type == "chart" && $0.groupBy == "store" }
         })
         #expect(draft.manifest.actions.contains { $0.type == "appStorage.insert" })
+        #expect(draft.manifest.actions.contains { $0.type == "task.createDraft" && $0.taskGoal?.isEmpty == false })
         #expect(draft.manifest.permissions.defaultMode == .draftOnly)
     }
 

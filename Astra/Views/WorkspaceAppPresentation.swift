@@ -384,6 +384,19 @@ enum WorkspaceAppDetailActionsPresentation {
                 input: WorkspaceAppActionInput()
             )
 
+        case "task.createDraft":
+            return WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: label?.isEmpty == false ? label! : action.id,
+                type: action.type,
+                isEnabled: true,
+                disabledReason: nil,
+                input: WorkspaceAppActionInput(
+                    taskTitle: action.taskTitle,
+                    taskGoal: action.taskGoal
+                )
+            )
+
         default:
             return WorkspaceAppDetailActionPresentation(
                 id: action.id,

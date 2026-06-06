@@ -6,6 +6,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case unsupportedActionType(String)
     case missingTable
     case missingRecord
+    case missingTaskGoal
     case permissionDenied(String)
     case storageFailed(String)
 
@@ -19,6 +20,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app storage action requires a table."
         case .missingRecord:
             "Workspace app storage write action requires a record."
+        case .missingTaskGoal:
+            "Workspace app task action requires a task goal."
         case .permissionDenied(let message):
             message
         case .storageFailed(let message):
@@ -31,15 +34,21 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
     var table: String?
     var record: [String: WorkspaceAppStorageValue]
     var limit: Int
+    var taskTitle: String?
+    var taskGoal: String?
 
     init(
         table: String? = nil,
         record: [String: WorkspaceAppStorageValue] = [:],
-        limit: Int = 100
+        limit: Int = 100,
+        taskTitle: String? = nil,
+        taskGoal: String? = nil
     ) {
         self.table = table
         self.record = record
         self.limit = limit
+        self.taskTitle = taskTitle
+        self.taskGoal = taskGoal
     }
 }
 
@@ -160,7 +169,23 @@ struct WorkspaceAppActionExecutor {
         do {
             let action = try actionSpec(actionID: actionID, manifest: manifest)
             try enforcePermission(for: action, app: app)
-            let result = try execute(action: action, app: app, workspace: workspace, input: input)
+            let result = try execute(
+                action: action,
+                app: app,
+                workspace: workspace,
+                manifest: manifest,
+                input: input,
+                modelContext: modelContext
+            )
+            run.linkedTaskID = result.linkedTaskID
+            if let linkedTaskID = result.linkedTaskID {
+                recorder.recordEvent(
+                    run: run,
+                    type: "workspaceApp.task.created",
+                    payload: ["taskID": .text(linkedTaskID.uuidString)],
+                    modelContext: modelContext
+                )
+            }
             recorder.completeRun(run, outputSummary: result.outputSummary, modelContext: modelContext)
             app.lastRunAt = Date()
             app.updatedAt = Date()
@@ -216,8 +241,10 @@ struct WorkspaceAppActionExecutor {
         action: WorkspaceAppActionSpec,
         app: WorkspaceApp,
         workspace: Workspace,
-        input: WorkspaceAppActionInput
-    ) throws -> (rows: [[String: WorkspaceAppStorageValue]], outputSummary: String) {
+        manifest: WorkspaceAppManifest,
+        input: WorkspaceAppActionInput,
+        modelContext: ModelContext
+    ) throws -> (rows: [[String: WorkspaceAppStorageValue]], outputSummary: String, linkedTaskID: UUID?) {
         let databaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
             workspacePath: workspace.primaryPath,
             appID: app.logicalID
@@ -231,18 +258,58 @@ struct WorkspaceAppActionExecutor {
             } catch {
                 throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
             }
-            return ([], "Inserted 1 record into \(table).")
+            return ([], "Inserted 1 record into \(table).", nil)
         case "appStorage.query":
             guard let table = input.table else { throw WorkspaceAppActionExecutionError.missingTable }
             do {
                 let rows = try storageService.records(in: table, databaseURL: databaseURL, limit: input.limit)
-                return (rows, "Read \(rows.count) records from \(table).")
+                return (rows, "Read \(rows.count) records from \(table).", nil)
             } catch {
                 throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
             }
+        case "task.createDraft":
+            let task = try createDraftTask(
+                action: action,
+                manifest: manifest,
+                input: input,
+                workspace: workspace,
+                modelContext: modelContext
+            )
+            return ([], "Created draft task '\(task.title)'.", task.id)
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
         }
+    }
+
+    private func createDraftTask(
+        action: WorkspaceAppActionSpec,
+        manifest: WorkspaceAppManifest,
+        input: WorkspaceAppActionInput,
+        workspace: Workspace,
+        modelContext: ModelContext
+    ) throws -> AgentTask {
+        let title = normalized(
+            input.taskTitle,
+            action.taskTitle,
+            action.label,
+            fallback: "\(manifest.app.name) task"
+        )
+        let goal = normalized(
+            input.taskGoal,
+            action.taskGoal,
+            fallback: ""
+        )
+        guard !goal.isEmpty else {
+            throw WorkspaceAppActionExecutionError.missingTaskGoal
+        }
+
+        let task = AgentTask(title: title, goal: goal, workspace: workspace)
+        task.inputs = [
+            "Created from Workspace App '\(manifest.app.name)' (\(manifest.app.id)).",
+            "Workspace App action: \(action.id)"
+        ]
+        modelContext.insert(task)
+        return task
     }
 
     private func effect(for actionType: String) -> WorkspaceAppContractEffect {
@@ -262,7 +329,8 @@ struct WorkspaceAppActionExecutor {
 
     private func inputSummary(_ input: WorkspaceAppActionInput) -> String {
         let table = input.table ?? "none"
-        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit)"
+        let taskGoal = input.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "present" : "none"
+        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); taskGoal=\(taskGoal)"
     }
 
     private func isPermissionError(_ error: Error) -> Bool {
@@ -270,5 +338,15 @@ struct WorkspaceAppActionExecutor {
             return true
         }
         return false
+    }
+
+    private func normalized(_ candidates: String?..., fallback: String) -> String {
+        for candidate in candidates {
+            let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return fallback
     }
 }

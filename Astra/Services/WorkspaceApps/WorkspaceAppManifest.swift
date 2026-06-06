@@ -229,19 +229,25 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var label: String?
     var requirementRef: String?
     var operation: String?
+    var taskTitle: String?
+    var taskGoal: String?
 
     init(
         id: String,
         type: String,
         label: String? = nil,
         requirementRef: String? = nil,
-        operation: String? = nil
+        operation: String? = nil,
+        taskTitle: String? = nil,
+        taskGoal: String? = nil
     ) {
         self.id = id
         self.type = type
         self.label = label
         self.requirementRef = requirementRef
         self.operation = operation
+        self.taskTitle = taskTitle
+        self.taskGoal = taskGoal
     }
 }
 

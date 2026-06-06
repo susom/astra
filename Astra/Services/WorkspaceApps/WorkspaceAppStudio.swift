@@ -161,6 +161,13 @@ enum WorkspaceAppStudioBuilder {
             actions: [
                 WorkspaceAppActionSpec(id: "list_items", type: "appStorage.query", label: "List Items"),
                 WorkspaceAppActionSpec(id: "add_item", type: "appStorage.insert", label: "Add Item"),
+                WorkspaceAppActionSpec(
+                    id: "create_shopping_task",
+                    type: "task.createDraft",
+                    label: "Create Shopping Task",
+                    taskTitle: "Plan next grocery trip",
+                    taskGoal: "Review the grocery tracker records and draft a focused shopping plan for the next trip."
+                ),
                 WorkspaceAppActionSpec(id: "export_items", type: "artifact.export", label: "Export Items")
             ],
             permissions: WorkspaceAppPermissions(
@@ -220,7 +227,13 @@ enum WorkspaceAppStudioBuilder {
             ],
             actions: [
                 WorkspaceAppActionSpec(id: "list_review_items", type: "appStorage.query", label: "List Review Items"),
-                WorkspaceAppActionSpec(id: "create_review_task", type: "task.createDraft", label: "Create Review Task")
+                WorkspaceAppActionSpec(
+                    id: "create_review_task",
+                    type: "task.createDraft",
+                    label: "Create Review Task",
+                    taskTitle: "Review workspace app items",
+                    taskGoal: "Review the current app records, identify the next manual decision, and summarize recommended follow-up."
+                )
             ],
             permissions: WorkspaceAppPermissions(
                 reads: ["workspace.context", "appStorage.records"],
