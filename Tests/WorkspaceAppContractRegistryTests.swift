@@ -25,6 +25,9 @@ struct WorkspaceAppContractRegistryTests {
         } == true)
         #expect(registry.implementation(id: "bigquery-read-native")?.transport == .native)
         #expect(registry.implementation(id: "bigquery-read-native")?.operations == ["previewRows", "runReadOnlyQuery"])
+        #expect(registry.implementation(id: "redcap-read-native")?.transport == .native)
+        #expect(registry.implementation(id: "redcap-write-native")?.transport == .native)
+        #expect(registry.implementation(id: "redcap-form-schema-native")?.transport == .native)
     }
 
     @Test("provider hint orders compatible implementations without filtering alternates")

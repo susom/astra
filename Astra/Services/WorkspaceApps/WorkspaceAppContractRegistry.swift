@@ -332,6 +332,33 @@ struct WorkspaceAppContractRegistry: Equatable {
             externalEffects: ["readOnly"]
         ),
         WorkspaceAppContractImplementation(
+            id: "redcap-read-native",
+            familyID: "recordProject.read",
+            provider: "redcap",
+            transport: .native,
+            operations: ["describeProject", "listForms", "listFields", "readRecords", "lookupRecord", "validateRecord"],
+            dataAccess: ["clinicalData", "externalService"],
+            externalEffects: ["readOnly"]
+        ),
+        WorkspaceAppContractImplementation(
+            id: "redcap-write-native",
+            familyID: "recordProject.write",
+            provider: "redcap",
+            transport: .native,
+            operations: ["prepareCreate", "prepareUpdate", "validateWrite", "submitCreate", "submitUpdate"],
+            dataAccess: ["clinicalData", "externalService"],
+            externalEffects: ["externalAPIWrite"]
+        ),
+        WorkspaceAppContractImplementation(
+            id: "redcap-form-schema-native",
+            familyID: "formSchema.read",
+            provider: "redcap",
+            transport: .native,
+            operations: ["describeForms", "describeFields", "describeBranchingRules"],
+            dataAccess: ["clinicalData", "externalService"],
+            externalEffects: ["readOnly"]
+        ),
+        WorkspaceAppContractImplementation(
             id: "redcap-read-task-backed",
             familyID: "recordProject.read",
             provider: "redcap",

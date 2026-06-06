@@ -199,6 +199,115 @@ struct WorkspaceAppSourceResolverTests {
         }
     }
 
+    @Test("async resolver reads REDCap record sources through native client")
+    func asyncResolverReadsREDCapRecordSourcesThroughNativeClient() async throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = Workspace(name: "Reconciliation", primaryPath: root.path)
+        let manifest = Self.reconciliationManifest()
+        let app = Self.app(for: manifest, workspace: workspace)
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: app.logicalID,
+            requirementID: "targetRecords",
+            contract: "recordProject.read",
+            operations: ["readRecords"],
+            optional: false,
+            status: .mapped,
+            implementationID: "redcap-read-native",
+            provider: "redcap",
+            transport: .native
+        )
+        let reader = MockWorkspaceAppREDCapReader(rows: [
+            ["record_id": .text("2"), "participant_id": .text("P-002")]
+        ])
+        let resolver = WorkspaceAppSourceResolver(
+            asyncCapabilityClient: WorkspaceAppNativeAsyncCapabilitySourceClient(redcapReader: reader)
+        )
+
+        let result = try await resolver.resolveAsync(
+            sourceID: "redcap_records",
+            app: app,
+            workspace: workspace,
+            manifest: manifest,
+            dependencyBindings: [binding],
+            input: WorkspaceAppSourceResolutionInput(
+                limit: 100,
+                parameters: ["record_id": .text("2")]
+            )
+        )
+
+        #expect(result.rows == [["record_id": .text("2"), "participant_id": .text("P-002")]])
+        #expect(result.implementationID == "redcap-read-native")
+        #expect(result.provider == "redcap")
+        #expect(await reader.requests.first == WorkspaceAppREDCapRequest(
+            operation: "readRecords",
+            projectRef: "enrollment",
+            sourceID: "redcap_records",
+            parameters: ["record_id": .text("2")],
+            record: [:]
+        ))
+    }
+
+    @Test("async resolver reads REDCap form schema sources through native client")
+    func asyncResolverReadsREDCapFormSchemaSourcesThroughNativeClient() async throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = Workspace(name: "Forms", primaryPath: root.path)
+        var manifest = Self.reconciliationManifest()
+        manifest.requirements = [
+            WorkspaceAppRequirement(
+                id: "targetForms",
+                contract: "formSchema.read",
+                operations: ["describeFields"],
+                providerHint: "redcap"
+            )
+        ]
+        manifest.sources = [
+            WorkspaceAppSource(
+                id: "redcap_fields",
+                requirementRef: "targetForms",
+                operation: "describeFields",
+                mode: "read",
+                projectRef: "enrollment"
+            )
+        ]
+        let app = Self.app(for: manifest, workspace: workspace)
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: app.logicalID,
+            requirementID: "targetForms",
+            contract: "formSchema.read",
+            operations: ["describeFields"],
+            optional: false,
+            status: .mapped,
+            implementationID: "redcap-form-schema-native",
+            provider: "redcap",
+            transport: .native
+        )
+        let reader = MockWorkspaceAppREDCapReader(rows: [
+            ["field_name": .text("participant_id"), "field_type": .text("text")]
+        ])
+        let resolver = WorkspaceAppSourceResolver(
+            asyncCapabilityClient: WorkspaceAppNativeAsyncCapabilitySourceClient(redcapReader: reader)
+        )
+
+        let result = try await resolver.resolveAsync(
+            sourceID: "redcap_fields",
+            app: app,
+            workspace: workspace,
+            manifest: manifest,
+            dependencyBindings: [binding]
+        )
+
+        #expect(result.rows == [["field_name": .text("participant_id"), "field_type": .text("text")]])
+        #expect(result.implementationID == "redcap-form-schema-native")
+        #expect(await reader.requests.first?.operation == "describeFields")
+        #expect(await reader.requests.first?.projectRef == "enrollment")
+    }
+
     @Test("resolver blocks capability sources without mapped dependencies")
     func resolverBlocksCapabilitySourcesWithoutMappedDependencies() throws {
         let root = try Self.temporaryRoot()
@@ -286,6 +395,20 @@ struct WorkspaceAppSourceResolverTests {
                 )
             ]
         )
+    }
+}
+
+private actor MockWorkspaceAppREDCapReader: WorkspaceAppREDCapReading {
+    private(set) var requests: [WorkspaceAppREDCapRequest] = []
+    var rows: [[String: WorkspaceAppStorageValue]]
+
+    init(rows: [[String: WorkspaceAppStorageValue]]) {
+        self.rows = rows
+    }
+
+    func read(_ request: WorkspaceAppREDCapRequest) async throws -> [[String: WorkspaceAppStorageValue]] {
+        requests.append(request)
+        return rows
     }
 }
 

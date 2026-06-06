@@ -685,7 +685,8 @@ struct WorkspaceAppManifestTests {
         #expect(bindings[0].transport == .taskBacked)
         #expect(bindings[1].requirementID == "targetRecords")
         #expect(bindings[1].status == .mapped)
-        #expect(bindings[1].implementationID == "redcap-read-task-backed")
+        #expect(bindings[1].implementationID == "redcap-read-native")
+        #expect(bindings[1].transport == .native)
 
         let automations = try context.fetch(FetchDescriptor<WorkspaceAppAutomationState>())
         #expect(automations.count == 1)

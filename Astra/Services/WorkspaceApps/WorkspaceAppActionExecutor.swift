@@ -219,7 +219,7 @@ struct WorkspaceAppRunRecorder {
 struct WorkspaceAppActionExecutor {
     var storageService = WorkspaceAppStorageService()
     var sourceResolver = WorkspaceAppSourceResolver()
-    var capabilityWriteClient: any WorkspaceAppCapabilityWriteClient = WorkspaceAppUnavailableCapabilityWriteClient()
+    var capabilityWriteClient: any WorkspaceAppCapabilityWriteClient = WorkspaceAppNativeCapabilityWriteClient()
     var recorder = WorkspaceAppRunRecorder()
 
     @MainActor

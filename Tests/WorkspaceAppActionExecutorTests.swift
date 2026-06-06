@@ -409,6 +409,113 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("native REDCap write client submits approved capability writes")
+    func nativeREDCapWriteClientSubmitsApprovedCapabilityWrites() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .approvalRequired)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        var manifest = fixture.manifest
+        let actionIndex = try #require(manifest.actions.firstIndex { $0.id == "submitRedcapRecord" })
+        manifest.actions[actionIndex].sourceRef = "enrollment"
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: fixture.workspace.id,
+            appID: fixture.app.id,
+            appLogicalID: fixture.app.logicalID,
+            requirementID: "redcapWrite",
+            contract: "recordProject.write",
+            operations: ["submitCreate"],
+            optional: false,
+            status: .mapped,
+            implementationID: "redcap-write-native",
+            provider: "redcap",
+            transport: .native
+        )
+        let writer = MockWorkspaceAppREDCapWriter(result: WorkspaceAppCapabilityWriteResult(
+            outputSummary: "Submitted REDCap create.",
+            rows: [["record_id": .text("P-001")]]
+        ))
+        let executor = WorkspaceAppActionExecutor(
+            capabilityWriteClient: WorkspaceAppNativeCapabilityWriteClient(redcapWriter: writer)
+        )
+
+        let result = try executor.execute(
+            actionID: "submitRedcapRecord",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: manifest,
+            dependencyBindings: [binding],
+            input: WorkspaceAppActionInput(
+                record: ["participant_id": .text("P-001")],
+                confirmedApproval: true
+            ),
+            modelContext: fixture.context
+        )
+
+        #expect(result.run.status == .completed)
+        #expect(result.outputSummary == "Submitted REDCap create.")
+        #expect(result.rows == [["record_id": .text("P-001")]])
+        #expect(writer.requests == [
+            WorkspaceAppREDCapRequest(
+                operation: "submitCreate",
+                projectRef: "enrollment",
+                sourceID: nil,
+                parameters: [:],
+                record: ["participant_id": .text("P-001")]
+            )
+        ])
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == result.run.id }
+        #expect(events.contains {
+            $0.type == "workspaceApp.capability.write" &&
+                $0.payload.contains("\"implementationID\":\"redcap-write-native\"") &&
+                $0.payload.contains("\"provider\":\"redcap\"")
+        })
+    }
+
+    @Test("native REDCap write client validates drafts locally")
+    func nativeREDCapWriteClientValidatesDraftsLocally() throws {
+        let action = WorkspaceAppActionSpec(
+            id: "validateRedcap",
+            type: "capability.write",
+            label: "Validate REDCap",
+            requirementRef: "redcapWrite",
+            operation: "validateWrite"
+        )
+        let requirement = WorkspaceAppRequirement(
+            id: "redcapWrite",
+            contract: "recordProject.write",
+            operations: ["validateWrite"],
+            providerHint: "redcap"
+        )
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: UUID(),
+            appID: UUID(),
+            appLogicalID: "redcap-app",
+            requirementID: "redcapWrite",
+            contract: "recordProject.write",
+            operations: ["validateWrite"],
+            optional: false,
+            status: .mapped,
+            implementationID: "redcap-write-native",
+            provider: "redcap",
+            transport: .native
+        )
+
+        let result = try WorkspaceAppREDCapWriteClient().write(
+            action: action,
+            requirement: requirement,
+            binding: binding,
+            input: WorkspaceAppActionInput(record: [
+                "participant_id": .text("P-001"),
+                "status": .text("ready")
+            ])
+        )
+
+        #expect(result.outputSummary == "Validated REDCap write draft with 2 fields.")
+        #expect(result.rows == [["status": .text("valid"), "fieldCount": .integer(2)]])
+    }
+
+    @MainActor
     @Test("pipeline actions execute declared steps in one app run")
     func pipelineActionsExecuteDeclaredStepsInOneAppRun() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
@@ -975,5 +1082,19 @@ private struct MockWorkspaceAppCapabilityWriteClient: WorkspaceAppCapabilityWrit
         input: WorkspaceAppActionInput
     ) throws -> WorkspaceAppCapabilityWriteResult {
         result
+    }
+}
+
+private final class MockWorkspaceAppREDCapWriter: WorkspaceAppREDCapWriting {
+    var requests: [WorkspaceAppREDCapRequest] = []
+    var result: WorkspaceAppCapabilityWriteResult
+
+    init(result: WorkspaceAppCapabilityWriteResult) {
+        self.result = result
+    }
+
+    func write(_ request: WorkspaceAppREDCapRequest) throws -> WorkspaceAppCapabilityWriteResult {
+        requests.append(request)
+        return result
     }
 }
