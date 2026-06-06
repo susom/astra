@@ -41,6 +41,106 @@ struct WorkspaceAppDetailActionPresentation: Identifiable, Equatable {
     var input: WorkspaceAppActionInput
 }
 
+struct WorkspaceAppStorageFormField: Identifiable, Equatable {
+    var id: String { name }
+    var name: String
+    var type: String
+    var isRequired: Bool
+}
+
+enum WorkspaceAppStorageRecordDraftError: LocalizedError, Equatable {
+    case missingRequiredField(String)
+    case invalidValue(field: String, type: String, value: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingRequiredField(let field):
+            return "\(field) is required."
+        case .invalidValue(let field, let type, let value):
+            return "\(field) must be \(type), not '\(value)'."
+        }
+    }
+}
+
+enum WorkspaceAppStorageRecordDraftBuilder {
+    static func fields(for table: WorkspaceAppStorageTable) -> [WorkspaceAppStorageFormField] {
+        table.columns.compactMap { column in
+            if column.primaryKey && column.type == "uuid" {
+                return nil
+            }
+            return WorkspaceAppStorageFormField(
+                name: column.name,
+                type: column.type,
+                isRequired: column.required
+            )
+        }
+    }
+
+    static func record(
+        for table: WorkspaceAppStorageTable,
+        values: [String: String],
+        uuid: () -> UUID = UUID.init
+    ) throws -> [String: WorkspaceAppStorageValue] {
+        var record: [String: WorkspaceAppStorageValue] = [:]
+        for column in table.columns {
+            let rawValue = values[column.name]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if rawValue.isEmpty {
+                if column.primaryKey && column.type == "uuid" {
+                    record[column.name] = .text(uuid().uuidString)
+                } else if column.required {
+                    throw WorkspaceAppStorageRecordDraftError.missingRequiredField(column.name)
+                }
+                continue
+            }
+            record[column.name] = try storageValue(rawValue, column: column)
+        }
+        return record
+    }
+
+    private static func storageValue(
+        _ rawValue: String,
+        column: WorkspaceAppStorageColumn
+    ) throws -> WorkspaceAppStorageValue {
+        switch column.type {
+        case "bool":
+            switch rawValue.lowercased() {
+            case "true", "yes", "1":
+                return .bool(true)
+            case "false", "no", "0":
+                return .bool(false)
+            default:
+                throw WorkspaceAppStorageRecordDraftError.invalidValue(
+                    field: column.name,
+                    type: column.type,
+                    value: rawValue
+                )
+            }
+        case "integer":
+            guard let value = Int64(rawValue) else {
+                throw WorkspaceAppStorageRecordDraftError.invalidValue(
+                    field: column.name,
+                    type: column.type,
+                    value: rawValue
+                )
+            }
+            return .integer(value)
+        case "double", "real":
+            guard let value = Double(rawValue) else {
+                throw WorkspaceAppStorageRecordDraftError.invalidValue(
+                    field: column.name,
+                    type: column.type,
+                    value: rawValue
+                )
+            }
+            return .real(value)
+        case "date", "datetime", "json", "text", "uuid":
+            return .text(rawValue)
+        default:
+            return .text(rawValue)
+        }
+    }
+}
+
 enum WorkspaceAppDetailActionsPresentation {
     static func actions(
         manifest: WorkspaceAppManifest?,
@@ -78,13 +178,33 @@ enum WorkspaceAppDetailActionsPresentation {
                 input: WorkspaceAppActionInput(table: table)
             )
 
-        case "appStorage.insert", "appStorage.update", "appStorage.delete":
+        case "appStorage.insert":
+            guard let table = storageTables.first?.name else {
+                return WorkspaceAppDetailActionPresentation(
+                    id: action.id,
+                    label: label?.isEmpty == false ? label! : action.id,
+                    type: action.type,
+                    isEnabled: false,
+                    disabledReason: "No app storage table is available.",
+                    input: WorkspaceAppActionInput()
+                )
+            }
+            return WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: label?.isEmpty == false ? label! : action.id,
+                type: action.type,
+                isEnabled: true,
+                disabledReason: nil,
+                input: WorkspaceAppActionInput(table: table)
+            )
+
+        case "appStorage.update", "appStorage.delete":
             return WorkspaceAppDetailActionPresentation(
                 id: action.id,
                 label: label?.isEmpty == false ? label! : action.id,
                 type: action.type,
                 isEnabled: false,
-                disabledReason: "This action needs record input before it can run.",
+                disabledReason: "This action needs record selection before it can run.",
                 input: WorkspaceAppActionInput()
             )
 

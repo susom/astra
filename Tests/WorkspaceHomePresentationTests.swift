@@ -183,14 +183,16 @@ struct WorkspaceHomePresentationTests {
         #expect(blockedDetail.canRunLocalActions == false)
     }
 
-    @Test("Workspace app detail actions enable safe storage queries and gate record input actions")
-    func workspaceAppDetailActionsEnableSafeStorageQueriesAndGateInputActions() {
+    @Test("Workspace app detail actions enable storage queries and inserts")
+    func workspaceAppDetailActionsEnableStorageQueriesAndInserts() throws {
         let manifest = WorkspaceAppManifest(
             app: WorkspaceAppManifestMetadata(id: "grocery", name: "Grocery"),
             storage: WorkspaceAppStorageSchema(tables: [
                 WorkspaceAppStorageTable(name: "items", columns: [
-                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true),
-                    WorkspaceAppStorageColumn(name: "name", type: "text")
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                    WorkspaceAppStorageColumn(name: "name", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "price", type: "double"),
+                    WorkspaceAppStorageColumn(name: "purchased", type: "bool")
                 ])
             ]),
             actions: [
@@ -218,11 +220,51 @@ struct WorkspaceHomePresentationTests {
         #expect(actions[0].isEnabled)
         #expect(actions[0].input.table == "items")
         #expect(actions[1].id == "addItem")
-        #expect(!actions[1].isEnabled)
-        #expect(actions[1].disabledReason == "This action needs record input before it can run.")
+        #expect(actions[1].isEnabled)
+        #expect(actions[1].input.table == "items")
         #expect(actions[2].id == "submit")
         #expect(!actions[2].isEnabled)
         #expect(actions[2].disabledReason == "This action type is not wired into the app renderer yet.")
+
+        let table = try #require(manifest.storage?.tables.first)
+        let fields = WorkspaceAppStorageRecordDraftBuilder.fields(for: table)
+        #expect(fields.map(\.name) == ["name", "price", "purchased"])
+
+        let record = try WorkspaceAppStorageRecordDraftBuilder.record(
+            for: table,
+            values: ["name": "Apples", "price": "2.49", "purchased": "yes"],
+            uuid: { UUID(uuidString: "00000000-0000-0000-0000-000000000123")! }
+        )
+        #expect(record["id"] == .text("00000000-0000-0000-0000-000000000123"))
+        #expect(record["name"] == .text("Apples"))
+        #expect(record["price"] == .real(2.49))
+        #expect(record["purchased"] == .bool(true))
+    }
+
+    @Test("Workspace app storage record draft validates required and typed input")
+    func workspaceAppStorageRecordDraftValidatesRequiredAndTypedInput() throws {
+        let table = WorkspaceAppStorageTable(name: "items", columns: [
+            WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+            WorkspaceAppStorageColumn(name: "name", type: "text", required: true),
+            WorkspaceAppStorageColumn(name: "quantity", type: "integer"),
+            WorkspaceAppStorageColumn(name: "purchased", type: "bool")
+        ])
+
+        #expect(throws: WorkspaceAppStorageRecordDraftError.missingRequiredField("name")) {
+            try WorkspaceAppStorageRecordDraftBuilder.record(for: table, values: [:])
+        }
+        #expect(throws: WorkspaceAppStorageRecordDraftError.invalidValue(field: "quantity", type: "integer", value: "many")) {
+            try WorkspaceAppStorageRecordDraftBuilder.record(for: table, values: [
+                "name": "Apples",
+                "quantity": "many"
+            ])
+        }
+        #expect(throws: WorkspaceAppStorageRecordDraftError.invalidValue(field: "purchased", type: "bool", value: "maybe")) {
+            try WorkspaceAppStorageRecordDraftBuilder.record(for: table, values: [
+                "name": "Apples",
+                "purchased": "maybe"
+            ])
+        }
     }
 
     @Test("App Studio turns a local database intent into a valid publishable draft")

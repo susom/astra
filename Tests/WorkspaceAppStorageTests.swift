@@ -74,6 +74,41 @@ struct WorkspaceAppStorageTests {
         }
     }
 
+    @Test("storage schema supports App Studio double and date aliases")
+    func storageSupportsAppStudioColumnAliases() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-storage-alias-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let databaseURL = root.appendingPathComponent("app.sqlite")
+        let service = WorkspaceAppStorageService()
+        let schema = WorkspaceAppStorageSchema(tables: [
+            WorkspaceAppStorageTable(name: "purchases", columns: [
+                WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                WorkspaceAppStorageColumn(name: "price", type: "double"),
+                WorkspaceAppStorageColumn(name: "purchased_at", type: "date")
+            ])
+        ])
+
+        try service.applySchema(schema, databaseURL: databaseURL)
+        try service.insertRecord(
+            [
+                "id": .text("purchase-1"),
+                "price": .real(2.49),
+                "purchased_at": .text("2026-06-05")
+            ],
+            into: "purchases",
+            databaseURL: databaseURL
+        )
+
+        let rows = try service.records(in: "purchases", databaseURL: databaseURL)
+
+        #expect(rows.count == 1)
+        #expect(rows[0]["price"] == .real(2.49))
+        #expect(rows[0]["purchased_at"] == .text("2026-06-05"))
+    }
+
     static func grocerySchema() -> WorkspaceAppStorageSchema {
         WorkspaceAppStorageSchema(tables: [
             WorkspaceAppStorageTable(name: "items", columns: [

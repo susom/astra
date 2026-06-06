@@ -11,6 +11,9 @@ struct WorkspaceAppDetailView: View {
     @State private var dataSnapshot = WorkspaceAppDetailDataSnapshot.empty
     @State private var actionStatusMessage = ""
     @State private var packageStatusMessage = ""
+    @State private var activeRecordAction: WorkspaceAppDetailActionPresentation?
+    @State private var recordFormValues: [String: String] = [:]
+    @State private var recordFormError = ""
 
     private var presentation: WorkspaceAppDetailPresentation {
         WorkspaceAppsPresentation.detail(for: app)
@@ -183,9 +186,21 @@ struct WorkspaceAppDetailView: View {
                     ForEach(actions) { action in
                         WorkspaceAppActionButton(
                             action: action,
-                            onRun: { runAction(action) }
+                            onRun: { handleAction(action) }
                         )
                     }
+                }
+
+                if let activeRecordAction,
+                   let table = storageTable(for: activeRecordAction) {
+                    WorkspaceAppStorageRecordForm(
+                        action: activeRecordAction,
+                        table: table,
+                        values: $recordFormValues,
+                        errorMessage: recordFormError,
+                        onCancel: clearRecordForm,
+                        onSubmit: { submitRecordAction(activeRecordAction, table: table) }
+                    )
                 }
 
                 if !actionStatusMessage.isEmpty {
@@ -230,6 +245,56 @@ struct WorkspaceAppDetailView: View {
         dataSnapshot = WorkspaceAppDetailDataLoader().load(app: app, workspace: workspace)
     }
 
+    private func handleAction(_ action: WorkspaceAppDetailActionPresentation) {
+        if action.type == "appStorage.insert" {
+            showRecordForm(for: action)
+        } else {
+            runAction(action)
+        }
+    }
+
+    private func showRecordForm(for action: WorkspaceAppDetailActionPresentation) {
+        activeRecordAction = action
+        recordFormValues = [:]
+        recordFormError = ""
+    }
+
+    private func clearRecordForm() {
+        activeRecordAction = nil
+        recordFormValues = [:]
+        recordFormError = ""
+    }
+
+    private func storageTable(for action: WorkspaceAppDetailActionPresentation) -> WorkspaceAppStorageTable? {
+        guard let tableName = action.input.table else { return nil }
+        return dataSnapshot.manifest?.storage?.tables.first { $0.name == tableName }
+    }
+
+    private func submitRecordAction(
+        _ action: WorkspaceAppDetailActionPresentation,
+        table: WorkspaceAppStorageTable
+    ) {
+        do {
+            let record = try WorkspaceAppStorageRecordDraftBuilder.record(
+                for: table,
+                values: recordFormValues
+            )
+            runAction(
+                WorkspaceAppDetailActionPresentation(
+                    id: action.id,
+                    label: action.label,
+                    type: action.type,
+                    isEnabled: action.isEnabled,
+                    disabledReason: action.disabledReason,
+                    input: WorkspaceAppActionInput(table: table.name, record: record)
+                )
+            )
+            clearRecordForm()
+        } catch {
+            recordFormError = error.localizedDescription
+        }
+    }
+
     private func runAction(_ action: WorkspaceAppDetailActionPresentation) {
         guard let manifest = dataSnapshot.manifest,
               let actionSpec = manifest.actions.first(where: { $0.id == action.id }) else {
@@ -253,6 +318,99 @@ struct WorkspaceAppDetailView: View {
         } catch {
             packageStatusMessage = String(describing: error)
         }
+    }
+}
+
+private struct WorkspaceAppStorageRecordForm: View {
+    let action: WorkspaceAppDetailActionPresentation
+    let table: WorkspaceAppStorageTable
+    @Binding var values: [String: String]
+    let errorMessage: String
+    let onCancel: () -> Void
+    let onSubmit: () -> Void
+
+    private var fields: [WorkspaceAppStorageFormField] {
+        WorkspaceAppStorageRecordDraftBuilder.fields(for: table)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(action.label)
+                    .font(Stanford.ui(14, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                Text(table.name)
+                    .font(Stanford.caption(11).weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+            }
+
+            if fields.isEmpty {
+                Text("This table has no editable fields.")
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+            } else {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 190, maximum: 260), spacing: 10, alignment: .top)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    ForEach(fields) { field in
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 4) {
+                                Text(field.name)
+                                    .font(Stanford.caption(11).weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                if field.isRequired {
+                                    Text("required")
+                                        .font(Stanford.caption(10).weight(.semibold))
+                                        .foregroundStyle(Stanford.statusWarn)
+                                }
+                            }
+
+                            TextField(field.type, text: binding(for: field.name))
+                                .textFieldStyle(.roundedBorder)
+                                .font(Stanford.caption(12))
+                        }
+                    }
+                }
+            }
+
+            if !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(Stanford.statusWarn)
+            }
+
+            HStack(spacing: 10) {
+                Spacer()
+
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(.borderless)
+
+                Button(action: onSubmit) {
+                    Label("Save Record", systemImage: "plus.circle")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private func binding(for field: String) -> Binding<String> {
+        Binding(
+            get: { values[field] ?? "" },
+            set: { values[field] = $0 }
+        )
     }
 }
 

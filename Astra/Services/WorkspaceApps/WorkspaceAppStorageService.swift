@@ -170,11 +170,11 @@ struct WorkspaceAppStorageService {
         switch type {
         case "bool":
             "INTEGER"
-        case "datetime", "json", "text", "uuid":
+        case "date", "datetime", "json", "text", "uuid":
             "TEXT"
         case "integer":
             "INTEGER"
-        case "real":
+        case "double", "real":
             "REAL"
         default:
             throw WorkspaceAppStorageError.unsupportedColumnType(type)
