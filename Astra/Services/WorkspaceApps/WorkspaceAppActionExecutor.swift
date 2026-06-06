@@ -369,14 +369,25 @@ struct WorkspaceAppActionExecutor {
                 artifactURL.path
             )
         case "task.createDraft":
-            let task = try createDraftTask(
+            let task = try createTask(
                 action: action,
                 manifest: manifest,
                 input: input,
                 workspace: workspace,
+                status: .draft,
                 modelContext: modelContext
             )
             return ([], "Created draft task '\(task.title)'.", task.id, nil)
+        case "task.createAndRun":
+            let task = try createTask(
+                action: action,
+                manifest: manifest,
+                input: input,
+                workspace: workspace,
+                status: .queued,
+                modelContext: modelContext
+            )
+            return ([], "Queued task '\(task.title)'.", task.id, nil)
         case "gate.humanApproval":
             return try executeHumanApprovalGate(
                 action: action,
@@ -685,11 +696,12 @@ struct WorkspaceAppActionExecutor {
         }
     }
 
-    private func createDraftTask(
+    private func createTask(
         action: WorkspaceAppActionSpec,
         manifest: WorkspaceAppManifest,
         input: WorkspaceAppActionInput,
         workspace: Workspace,
+        status: TaskStatus,
         modelContext: ModelContext
     ) throws -> AgentTask {
         let title = normalized(
@@ -708,6 +720,7 @@ struct WorkspaceAppActionExecutor {
         }
 
         let task = AgentTask(title: title, goal: goal, workspace: workspace)
+        task.status = status
         task.inputs = [
             "Created from Workspace App '\(manifest.app.name)' (\(manifest.app.id)).",
             "Workspace App action: \(action.id)"

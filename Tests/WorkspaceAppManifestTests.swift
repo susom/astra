@@ -172,14 +172,19 @@ struct WorkspaceAppManifestTests {
         #expect(blockedWidget.issue?.message.contains("Unknown WebView widget") == true)
     }
 
-    @Test("manifest validation rejects task draft actions without a goal")
-    func validationRejectsTaskDraftActionsWithoutGoal() {
+    @Test("manifest validation rejects task actions without a goal")
+    func validationRejectsTaskActionsWithoutGoal() {
         var manifest = Self.reconciliationManifest()
         manifest.actions = [
             WorkspaceAppActionSpec(
                 id: "create_review",
                 type: "task.createDraft",
                 label: "Create Review Task"
+            ),
+            WorkspaceAppActionSpec(
+                id: "run_review",
+                type: "task.createAndRun",
+                label: "Run Review Task"
             )
         ]
 
@@ -188,6 +193,9 @@ struct WorkspaceAppManifestTests {
         #expect(!report.isValid)
         #expect(report.blockers.contains {
             $0.path == "/actions/0/taskGoal" && $0.message.contains("task goal")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/1/taskGoal" && $0.message.contains("task goal")
         })
     }
 

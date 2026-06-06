@@ -252,6 +252,39 @@ struct WorkspaceAppActionExecutorTests {
         let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
         #expect(events.contains { event in
             event.type == "workspaceApp.task.created" &&
+            event.payload.contains(task.id.uuidString)
+        })
+    }
+
+    @MainActor
+    @Test("task create and run actions queue linked AgentTasks")
+    func taskCreateAndRunActionsQueueLinkedAgentTasks() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .preApproved)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        let result = try WorkspaceAppActionExecutor().execute(
+            actionID: "runReviewTask",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+
+        let task = try #require(try fixture.context.fetch(FetchDescriptor<AgentTask>()).first {
+            $0.id == result.run.linkedTaskID
+        })
+        #expect(task.status == .queued)
+        #expect(task.workspace?.id == fixture.workspace.id)
+        #expect(task.title == "Run grocery review")
+        #expect(task.goal == "Run the grocery review workflow and summarize the required follow-up.")
+        #expect(task.inputs.contains("Created from Workspace App 'Grocery Actions' (grocery-actions)."))
+        #expect(result.outputSummary == "Queued task 'Run grocery review'.")
+        #expect(result.run.status == .completed)
+        #expect(result.run.linkedTaskID == task.id)
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+        #expect(events.contains { event in
+            event.type == "workspaceApp.task.created" &&
                 event.payload.contains(task.id.uuidString)
         })
     }
@@ -608,6 +641,13 @@ struct WorkspaceAppActionExecutorTests {
                     label: "Create Review Task",
                     taskTitle: "Review grocery records",
                     taskGoal: "Review the grocery records and propose the next shopping task."
+                ),
+                WorkspaceAppActionSpec(
+                    id: "runReviewTask",
+                    type: "task.createAndRun",
+                    label: "Run Review Task",
+                    taskTitle: "Run grocery review",
+                    taskGoal: "Run the grocery review workflow and summarize the required follow-up."
                 ),
                 WorkspaceAppActionSpec(
                     id: "exportItems",

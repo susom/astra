@@ -310,9 +310,9 @@ enum WorkspaceAppManifestValidator {
                !["csv", "json"].contains(format) {
                 issues.append(blocker("\(path)/exportFormat", "Artifact export format must be csv or json."))
             }
-            if action.type == "task.createDraft",
+            if ["task.createDraft", "task.createAndRun"].contains(action.type),
                action.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-                issues.append(blocker("\(path)/taskGoal", "Task draft action must declare a task goal."))
+                issues.append(blocker("\(path)/taskGoal", "Task action must declare a task goal."))
             }
             if action.type == "gate.humanApproval" {
                 if action.approvalPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
