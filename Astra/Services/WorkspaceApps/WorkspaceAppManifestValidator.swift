@@ -474,6 +474,50 @@ enum WorkspaceAppManifestValidator {
             if let action = automation.action, !actionIDs.contains(action) {
                 issues.append(blocker("\(path)/action", "Automation references unknown action '\(action)'."))
             }
+            validateAutomationSchedule(automation, path: path, issues: &issues)
+        }
+    }
+
+    private static func validateAutomationSchedule(
+        _ automation: WorkspaceAppAutomationSpec,
+        path: String,
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        guard automation.type == "schedule" || automation.type == "monitor" else { return }
+        guard let scheduleType = automation.scheduleType?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !scheduleType.isEmpty else {
+            return
+        }
+        switch scheduleType {
+        case "interval":
+            if (automation.intervalSeconds ?? 0) <= 0 {
+                issues.append(blocker("\(path)/intervalSeconds", "Interval automation must declare positive interval seconds."))
+            }
+        case "daily":
+            validateHourMinute(automation, path: path, issues: &issues)
+        case "weekly":
+            validateHourMinute(automation, path: path, issues: &issues)
+            guard let weekday = automation.weeklyDayOfWeek, (1...7).contains(weekday) else {
+                issues.append(blocker("\(path)/weeklyDayOfWeek", "Weekly automation day must be 1 through 7."))
+                return
+            }
+        default:
+            issues.append(blocker("\(path)/scheduleType", "Automation schedule type '\(scheduleType)' is not supported."))
+        }
+    }
+
+    private static func validateHourMinute(
+        _ automation: WorkspaceAppAutomationSpec,
+        path: String,
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        guard let hour = automation.dailyHour, (0...23).contains(hour) else {
+            issues.append(blocker("\(path)/dailyHour", "Scheduled automation hour must be 0 through 23."))
+            return
+        }
+        guard let minute = automation.dailyMinute, (0...59).contains(minute) else {
+            issues.append(blocker("\(path)/dailyMinute", "Scheduled automation minute must be 0 through 59."))
+            return
         }
     }
 

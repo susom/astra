@@ -54,6 +54,42 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid automation schedules")
+    func validationRejectsInvalidAutomationSchedules() {
+        var manifest = Self.reconciliationManifest()
+        manifest.automations = [
+            WorkspaceAppAutomationSpec(
+                id: "fast",
+                type: "schedule",
+                action: "refresh",
+                scheduleType: "interval",
+                intervalSeconds: 0
+            ),
+            WorkspaceAppAutomationSpec(
+                id: "weekly",
+                type: "schedule",
+                action: "refresh",
+                scheduleType: "weekly",
+                dailyHour: 25,
+                dailyMinute: 0,
+                weeklyDayOfWeek: 9
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/automations/0/intervalSeconds" && $0.message.contains("positive")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/automations/1/dailyHour" && $0.message.contains("0 through 23")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/automations/1/weeklyDayOfWeek" && $0.message.contains("1 through 7")
+        })
+    }
+
     @Test("manifest validation rejects view widgets bound to unknown storage")
     func validationRejectsUnknownViewWidgetStorageBindings() {
         var manifest = Self.reconciliationManifest()
@@ -785,7 +821,9 @@ struct WorkspaceAppManifestTests {
                 id: "daily-refresh",
                 type: "schedule",
                 enabledByDefault: false,
-                action: "refresh"
+                action: "refresh",
+                scheduleType: "interval",
+                intervalSeconds: 3_600
             )
         ]
 
@@ -811,6 +849,7 @@ struct WorkspaceAppManifestTests {
         #expect(automations.count == 1)
         #expect(automations[0].isEnabled)
         #expect(automations[0].status == .enabled)
+        #expect(automations[0].nextRunAt == enabledAt.addingTimeInterval(3_600))
         #expect(automations[0].updatedAt == enabledAt)
         #expect(result.app.updatedAt == enabledAt)
         #expect(try Data(contentsOf: result.manifestURL) == originalManifestData)

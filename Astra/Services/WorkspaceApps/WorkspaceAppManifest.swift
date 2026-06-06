@@ -428,12 +428,57 @@ struct WorkspaceAppAutomationSpec: Codable, Sendable, Equatable {
     var type: String
     var enabledByDefault: Bool
     var action: String?
+    var scheduleType: String?
+    var intervalSeconds: Int?
+    var dailyHour: Int?
+    var dailyMinute: Int?
+    var weeklyDayOfWeek: Int?
 
-    init(id: String, type: String, enabledByDefault: Bool = false, action: String? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case enabledByDefault
+        case action
+        case scheduleType
+        case intervalSeconds
+        case dailyHour
+        case dailyMinute
+        case weeklyDayOfWeek
+    }
+
+    init(
+        id: String,
+        type: String,
+        enabledByDefault: Bool = false,
+        action: String? = nil,
+        scheduleType: String? = nil,
+        intervalSeconds: Int? = nil,
+        dailyHour: Int? = nil,
+        dailyMinute: Int? = nil,
+        weeklyDayOfWeek: Int? = nil
+    ) {
         self.id = id
         self.type = type
         self.enabledByDefault = enabledByDefault
         self.action = action
+        self.scheduleType = scheduleType
+        self.intervalSeconds = intervalSeconds
+        self.dailyHour = dailyHour
+        self.dailyMinute = dailyMinute
+        self.weeklyDayOfWeek = weeklyDayOfWeek
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(String.self, forKey: .type)
+        enabledByDefault = try container.decodeIfPresent(Bool.self, forKey: .enabledByDefault) ?? false
+        action = try container.decodeIfPresent(String.self, forKey: .action)
+        scheduleType = try container.decodeIfPresent(String.self, forKey: .scheduleType)
+        intervalSeconds = try container.decodeIfPresent(Int.self, forKey: .intervalSeconds)
+        dailyHour = try container.decodeIfPresent(Int.self, forKey: .dailyHour)
+        dailyMinute = try container.decodeIfPresent(Int.self, forKey: .dailyMinute)
+        weeklyDayOfWeek = try container.decodeIfPresent(Int.self, forKey: .weeklyDayOfWeek)
     }
 }
 

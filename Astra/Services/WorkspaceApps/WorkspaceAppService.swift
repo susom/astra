@@ -44,6 +44,7 @@ struct WorkspaceAppService {
     var fileManager: FileManager = .default
     var storageService = WorkspaceAppStorageService()
     var contractRegistry = WorkspaceAppContractRegistry()
+    var automationScheduler = WorkspaceAppAutomationScheduler()
 
     @MainActor
     func createApp(
@@ -348,6 +349,12 @@ struct WorkspaceAppService {
 
         automation.isEnabled = isEnabled
         automation.status = isEnabled ? .enabled : .disabled
+        if isEnabled {
+            automation.nextRunAt = automationSpec(app: app, automationID: automationID, workspace: workspace)
+                .flatMap { automationScheduler.nextRunDate(for: $0, after: now) }
+        } else {
+            automation.nextRunAt = nil
+        }
         automation.updatedAt = now
         app.updatedAt = now
         workspace?.updatedAt = now
@@ -361,6 +368,21 @@ struct WorkspaceAppService {
             "automation_id": automationID,
             "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
         ])
+    }
+
+    private func automationSpec(
+        app: WorkspaceApp,
+        automationID: String,
+        workspace: Workspace?
+    ) -> WorkspaceAppAutomationSpec? {
+        guard let workspace else { return nil }
+        let manifestURL = URL(fileURLWithPath: workspace.primaryPath)
+            .appendingPathComponent(app.manifestRelativePath)
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONDecoder().decode(WorkspaceAppManifest.self, from: data) else {
+            return nil
+        }
+        return manifest.automations.first { $0.id == automationID }
     }
 
     nonisolated static func encodeManifest(_ manifest: WorkspaceAppManifest) throws -> Data {
