@@ -344,6 +344,71 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("capability write actions require approval and record audited writes")
+    func capabilityWriteActionsRequireApprovalAndRecordAuditedWrites() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .approvalRequired)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: fixture.workspace.id,
+            appID: fixture.app.id,
+            appLogicalID: fixture.app.logicalID,
+            requirementID: "redcapWrite",
+            contract: "recordProject.write",
+            operations: ["submitCreate"],
+            optional: false,
+            status: .mapped,
+            implementationID: "redcap-write-task-backed",
+            provider: "redcap",
+            transport: .taskBacked
+        )
+        let executor = WorkspaceAppActionExecutor(
+            capabilityWriteClient: MockWorkspaceAppCapabilityWriteClient(
+                result: WorkspaceAppCapabilityWriteResult(outputSummary: "Submitted REDCap create draft.")
+            )
+        )
+
+        #expect(throws: WorkspaceAppActionExecutionError.permissionDenied(
+            "External write action 'submitRedcapRecord' requires explicit approval before execution."
+        )) {
+            try executor.execute(
+                actionID: "submitRedcapRecord",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                dependencyBindings: [binding],
+                input: WorkspaceAppActionInput(record: ["participant_id": .text("P-001")]),
+                modelContext: fixture.context
+            )
+        }
+
+        let result = try executor.execute(
+            actionID: "submitRedcapRecord",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            dependencyBindings: [binding],
+            input: WorkspaceAppActionInput(
+                record: ["participant_id": .text("P-001")],
+                confirmedApproval: true
+            ),
+            modelContext: fixture.context
+        )
+
+        #expect(result.run.status == .completed)
+        #expect(result.outputSummary == "Submitted REDCap create draft.")
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == result.run.id }
+        #expect(events.contains {
+            $0.type == "workspaceApp.capability.write" &&
+                $0.payload.contains("\"requirementID\":\"redcapWrite\"") &&
+                $0.payload.contains("\"implementationID\":\"redcap-write-task-backed\"") &&
+                $0.payload.contains("\"provider\":\"redcap\"") &&
+                $0.payload.contains("\"recordKeys\":\"participant_id\"")
+        })
+    }
+
+    @MainActor
     @Test("pipeline actions execute declared steps in one app run")
     func pipelineActionsExecuteDeclaredStepsInOneAppRun() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
@@ -655,6 +720,12 @@ struct WorkspaceAppActionExecutorTests {
                     contract: "tabularQuery.read",
                     operations: ["runReadOnlyQuery"],
                     providerHint: "bigQuery"
+                ),
+                WorkspaceAppRequirement(
+                    id: "redcapWrite",
+                    contract: "recordProject.write",
+                    operations: ["submitCreate"],
+                    providerHint: "redcap"
                 )
             ],
             storage: WorkspaceAppStorageSchema(tables: [
@@ -727,6 +798,13 @@ struct WorkspaceAppActionExecutorTests {
                     sourceRef: "warehouseLatest"
                 ),
                 WorkspaceAppActionSpec(
+                    id: "submitRedcapRecord",
+                    type: "capability.write",
+                    label: "Submit REDCap Record",
+                    requirementRef: "redcapWrite",
+                    operation: "submitCreate"
+                ),
+                WorkspaceAppActionSpec(
                     id: "exportItems",
                     type: "artifact.export",
                     label: "Export Items",
@@ -770,6 +848,7 @@ struct WorkspaceAppActionExecutorTests {
             permissions: WorkspaceAppPermissions(
                 reads: ["appStorage.records"],
                 writes: ["appStorage.records"],
+                externalWrites: ["recordProject.write"],
                 defaultMode: permissionMode
             )
         )
@@ -786,5 +865,18 @@ private struct MockWorkspaceAppCapabilitySourceClient: WorkspaceAppCapabilitySou
         input: WorkspaceAppSourceResolutionInput
     ) throws -> [[String: WorkspaceAppStorageValue]] {
         rowsBySourceID[source.id] ?? []
+    }
+}
+
+private struct MockWorkspaceAppCapabilityWriteClient: WorkspaceAppCapabilityWriteClient {
+    var result: WorkspaceAppCapabilityWriteResult
+
+    func write(
+        action: WorkspaceAppActionSpec,
+        requirement: WorkspaceAppRequirement,
+        binding: WorkspaceAppDependencyBinding,
+        input: WorkspaceAppActionInput
+    ) throws -> WorkspaceAppCapabilityWriteResult {
+        result
     }
 }

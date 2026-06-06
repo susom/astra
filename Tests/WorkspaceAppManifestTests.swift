@@ -370,6 +370,45 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects capability writes without requirement or operation")
+    func validationRejectsCapabilityWritesWithoutRequirementOrOperation() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "write_missing_requirement",
+                type: "capability.write",
+                label: "Write Missing",
+                operation: "submitCreate"
+            ),
+            WorkspaceAppActionSpec(
+                id: "write_missing_operation",
+                type: "capability.write",
+                label: "Write Missing Operation",
+                requirementRef: "targetRecords"
+            ),
+            WorkspaceAppActionSpec(
+                id: "write_unknown_requirement",
+                type: "capability.write",
+                label: "Write Unknown",
+                requirementRef: "unknownWrite",
+                operation: "submitCreate"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/requirementRef" && $0.message.contains("requirement reference")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/1/operation" && $0.message.contains("operation")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/2/requirementRef" && $0.message.contains("unknownWrite")
+        })
+    }
+
     @Test("manifest encoding preserves native widget specs")
     func manifestEncodingPreservesNativeWidgetSpecs() throws {
         let manifest = Self.reconciliationManifest()

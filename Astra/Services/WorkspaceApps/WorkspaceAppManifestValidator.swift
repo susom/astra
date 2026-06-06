@@ -315,6 +315,17 @@ enum WorkspaceAppManifestValidator {
                     issues.append(blocker("\(path)/sourceRef", "Capability read action references unknown source '\(sourceRef)'."))
                 }
             }
+            if action.type == "capability.write" {
+                if action.requirementRef?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    issues.append(blocker("\(path)/requirementRef", "Capability write action must declare a requirement reference."))
+                } else if let requirementRef = action.requirementRef,
+                          !requirementIDs.contains(requirementRef) {
+                    issues.append(blocker("\(path)/requirementRef", "Capability write action references unknown requirement '\(requirementRef)'."))
+                }
+                if action.operation?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    issues.append(blocker("\(path)/operation", "Capability write action must declare an operation."))
+                }
+            }
             if action.type == "artifact.export",
                let format = action.exportFormat?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
                !format.isEmpty,

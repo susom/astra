@@ -7,12 +7,15 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingTable
     case missingRecord
     case missingSource
+    case missingRequirement(String)
+    case missingMappedBinding(String)
     case missingPrimaryKey(String)
     case missingTaskGoal
     case missingPipelineSteps(String)
     case unsupportedExportFormat(String)
     case approvalRequired(String)
     case gateBlocked(String)
+    case capabilityWriteUnavailable(String)
     case permissionDenied(String)
     case storageFailed(String)
 
@@ -28,6 +31,10 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app storage write action requires a record."
         case .missingSource:
             "Workspace app capability read action requires a source."
+        case .missingRequirement(let requirementID):
+            "Workspace app action references unknown requirement '\(requirementID)'."
+        case .missingMappedBinding(let requirementID):
+            "Workspace app action requirement '\(requirementID)' is not mapped to a capability implementation."
         case .missingPrimaryKey(let table):
             "Workspace app storage table '\(table)' must declare a primary key for this action."
         case .missingTaskGoal:
@@ -40,6 +47,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app approval gate '\(actionID)' requires human approval before execution can continue."
         case .gateBlocked(let actionID):
             "Workspace app expression gate '\(actionID)' blocked execution."
+        case .capabilityWriteUnavailable(let actionID):
+            "Workspace app capability write action '\(actionID)' does not have a deterministic write implementation."
         case .permissionDenied(let message):
             message
         case .storageFailed(let message):
@@ -83,6 +92,36 @@ struct WorkspaceAppActionExecutionResult: Equatable {
     var run: WorkspaceAppRun
     var rows: [[String: WorkspaceAppStorageValue]]
     var outputSummary: String
+}
+
+struct WorkspaceAppCapabilityWriteResult: Sendable, Equatable {
+    var outputSummary: String
+    var rows: [[String: WorkspaceAppStorageValue]]
+
+    init(outputSummary: String, rows: [[String: WorkspaceAppStorageValue]] = []) {
+        self.outputSummary = outputSummary
+        self.rows = rows
+    }
+}
+
+protocol WorkspaceAppCapabilityWriteClient {
+    func write(
+        action: WorkspaceAppActionSpec,
+        requirement: WorkspaceAppRequirement,
+        binding: WorkspaceAppDependencyBinding,
+        input: WorkspaceAppActionInput
+    ) throws -> WorkspaceAppCapabilityWriteResult
+}
+
+struct WorkspaceAppUnavailableCapabilityWriteClient: WorkspaceAppCapabilityWriteClient {
+    func write(
+        action: WorkspaceAppActionSpec,
+        requirement: WorkspaceAppRequirement,
+        binding: WorkspaceAppDependencyBinding,
+        input: WorkspaceAppActionInput
+    ) throws -> WorkspaceAppCapabilityWriteResult {
+        throw WorkspaceAppActionExecutionError.capabilityWriteUnavailable(action.id)
+    }
 }
 
 struct WorkspaceAppRunRecorder {
@@ -174,6 +213,7 @@ struct WorkspaceAppRunRecorder {
 struct WorkspaceAppActionExecutor {
     var storageService = WorkspaceAppStorageService()
     var sourceResolver = WorkspaceAppSourceResolver()
+    var capabilityWriteClient: any WorkspaceAppCapabilityWriteClient = WorkspaceAppUnavailableCapabilityWriteClient()
     var recorder = WorkspaceAppRunRecorder()
 
     @MainActor
@@ -269,11 +309,25 @@ struct WorkspaceAppActionExecutor {
                 )
             }
         case .externalWrite:
-            guard app.permissionMode == .preApproved else {
+            if app.permissionMode == .preApproved {
+                return
+            }
+            if app.permissionMode == .approvalRequired {
+                guard input.confirmedApproval else {
+                    throw WorkspaceAppActionExecutionError.permissionDenied(
+                        "External write action '\(action.id)' requires explicit approval before execution."
+                    )
+                }
+                return
+            }
+            if app.permissionMode == .draftOnly {
                 throw WorkspaceAppActionExecutionError.permissionDenied(
-                    "External write action '\(action.id)' requires approval before execution."
+                    "Draft-only workspace apps cannot submit external write action '\(action.id)'."
                 )
             }
+            throw WorkspaceAppActionExecutionError.permissionDenied(
+                "Read-only workspace apps cannot submit external write action '\(action.id)'."
+            )
         case .destructive:
             guard app.permissionMode != .readOnly else {
                 throw WorkspaceAppActionExecutionError.permissionDenied(
@@ -365,6 +419,16 @@ struct WorkspaceAppActionExecutor {
                 action: action,
                 app: app,
                 workspace: workspace,
+                manifest: manifest,
+                dependencyBindings: dependencyBindings,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
+        case "capability.write":
+            return try executeCapabilityWrite(
+                action: action,
+                app: app,
                 manifest: manifest,
                 dependencyBindings: dependencyBindings,
                 input: input,
@@ -572,6 +636,61 @@ struct WorkspaceAppActionExecutor {
             modelContext: modelContext
         )
         return (resolved.rows, resolved.outputSummary, nil, nil)
+    }
+
+    private func executeCapabilityWrite(
+        action: WorkspaceAppActionSpec,
+        app: WorkspaceApp,
+        manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding],
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        guard !input.record.isEmpty else { throw WorkspaceAppActionExecutionError.missingRecord }
+        let requirementID = normalized(action.requirementRef, fallback: "")
+        guard !requirementID.isEmpty else {
+            throw WorkspaceAppActionExecutionError.missingRequirement("")
+        }
+        guard let requirement = manifest.requirements.first(where: { $0.id == requirementID }) else {
+            throw WorkspaceAppActionExecutionError.missingRequirement(requirementID)
+        }
+        guard let binding = dependencyBindings.first(where: {
+            $0.appID == app.id && $0.requirementID == requirementID && $0.status == .mapped
+        }) else {
+            throw WorkspaceAppActionExecutionError.missingMappedBinding(requirementID)
+        }
+        let result = try capabilityWriteClient.write(
+            action: action,
+            requirement: requirement,
+            binding: binding,
+            input: input
+        )
+        var payload: [String: WorkspaceAppStorageValue] = [
+            "actionID": .text(action.id),
+            "requirementID": .text(requirementID),
+            "contract": .text(binding.contract),
+            "operation": .text(action.operation ?? ""),
+            "recordKeys": .text(input.record.keys.sorted().joined(separator: ","))
+        ]
+        if let implementationID = binding.implementationID {
+            payload["implementationID"] = .text(implementationID)
+        }
+        if let provider = binding.provider {
+            payload["provider"] = .text(provider)
+        }
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.capability.write",
+            payload: payload,
+            modelContext: modelContext
+        )
+        return (result.rows, result.outputSummary, nil, nil)
     }
 
     private func executePipeline(
