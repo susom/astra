@@ -282,6 +282,36 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid agent recommendation gates")
+    func validationRejectsInvalidAgentRecommendationGates() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "agent_gate",
+                type: "gate.agentRecommendation",
+                label: "Agent Gate",
+                agentPolicyMode: "automatic",
+                agentTokenBudget: 0
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/agentPrompt" && $0.message.contains("agent prompt")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/agentDecisions" && $0.message.contains("available decisions")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/agentPolicyMode" && $0.message.contains("not supported")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/agentTokenBudget" && $0.message.contains("positive")
+        })
+    }
+
     @Test("manifest validation rejects invalid pipeline step references")
     func validationRejectsInvalidPipelineStepReferences() {
         var manifest = Self.reconciliationManifest()

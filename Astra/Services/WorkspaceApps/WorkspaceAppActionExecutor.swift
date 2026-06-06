@@ -14,6 +14,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingPipelineSteps(String)
     case unsupportedExportFormat(String)
     case approvalRequired(String)
+    case agentRecommendationRequired(String)
     case gateBlocked(String)
     case capabilityWriteUnavailable(String)
     case permissionDenied(String)
@@ -44,9 +45,11 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
         case .unsupportedExportFormat(let format):
             "Workspace app artifact export format '\(format)' is not supported."
         case .approvalRequired(let actionID):
-            "Workspace app approval gate '\(actionID)' requires human approval before execution can continue."
+            "Workspace app gate '\(actionID)' requires human approval before execution can continue."
+        case .agentRecommendationRequired(let actionID):
+            "Workspace app agent recommendation gate '\(actionID)' requires an agent recommendation before execution can continue."
         case .gateBlocked(let actionID):
-            "Workspace app expression gate '\(actionID)' blocked execution."
+            "Workspace app gate '\(actionID)' blocked execution."
         case .capabilityWriteUnavailable(let actionID):
             "Workspace app capability write action '\(actionID)' does not have a deterministic write implementation."
         case .permissionDenied(let message):
@@ -66,6 +69,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
     var taskGoal: String?
     var confirmedDestructive: Bool
     var confirmedApproval: Bool
+    var agentRecommendationDecision: String?
 
     init(
         table: String? = nil,
@@ -75,7 +79,8 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         taskTitle: String? = nil,
         taskGoal: String? = nil,
         confirmedDestructive: Bool = false,
-        confirmedApproval: Bool = false
+        confirmedApproval: Bool = false,
+        agentRecommendationDecision: String? = nil
     ) {
         self.table = table
         self.record = record
@@ -85,6 +90,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         self.taskGoal = taskGoal
         self.confirmedDestructive = confirmedDestructive
         self.confirmedApproval = confirmedApproval
+        self.agentRecommendationDecision = agentRecommendationDecision
     }
 }
 
@@ -484,6 +490,13 @@ struct WorkspaceAppActionExecutor {
                 run: run,
                 modelContext: modelContext
             )
+        case "gate.agentRecommendation":
+            return try executeAgentRecommendationGate(
+                action: action,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
         case "pipeline.run":
             return try executePipeline(
                 action: action,
@@ -587,6 +600,87 @@ struct WorkspaceAppActionExecutor {
             modelContext: modelContext
         )
         return ([], "Expression gate '\(action.id)' passed.", nil, nil)
+    }
+
+    private func executeAgentRecommendationGate(
+        action: WorkspaceAppActionSpec,
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let prompt = action.agentPrompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let policyMode = action.agentPolicyMode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let decisions = Set(action.agentDecisions)
+        let decision = input.agentRecommendationDecision?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let requiresApproval = action.agentRequiresApproval || policyMode == "approvalRequired"
+
+        guard !prompt.isEmpty, !decisions.isEmpty, !policyMode.isEmpty else {
+            throw WorkspaceAppActionExecutionError.gateBlocked(action.id)
+        }
+        if decision.isEmpty {
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.agentRecommendation.requested",
+                payload: agentRecommendationPayload(
+                    action: action,
+                    prompt: prompt,
+                    policyMode: policyMode,
+                    decision: nil,
+                    requiresApproval: requiresApproval
+                ),
+                modelContext: modelContext
+            )
+            throw WorkspaceAppActionExecutionError.agentRecommendationRequired(action.id)
+        }
+        guard decisions.contains(decision) else {
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.agentRecommendation.blocked",
+                payload: agentRecommendationPayload(
+                    action: action,
+                    prompt: prompt,
+                    policyMode: policyMode,
+                    decision: decision,
+                    requiresApproval: requiresApproval
+                ),
+                modelContext: modelContext
+            )
+            throw WorkspaceAppActionExecutionError.gateBlocked(action.id)
+        }
+        if requiresApproval && !input.confirmedApproval {
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.agentRecommendation.approvalRequested",
+                payload: agentRecommendationPayload(
+                    action: action,
+                    prompt: prompt,
+                    policyMode: policyMode,
+                    decision: decision,
+                    requiresApproval: true
+                ),
+                modelContext: modelContext
+            )
+            throw WorkspaceAppActionExecutionError.approvalRequired(action.id)
+        }
+
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.agentRecommendation.accepted",
+            payload: agentRecommendationPayload(
+                action: action,
+                prompt: prompt,
+                policyMode: policyMode,
+                decision: decision,
+                requiresApproval: requiresApproval
+            ),
+            modelContext: modelContext
+        )
+        return ([], "Agent recommendation gate '\(action.id)' accepted '\(decision)'.", nil, nil)
     }
 
     private func executeCapabilityRead(
@@ -922,6 +1016,8 @@ struct WorkspaceAppActionExecutor {
         switch actionType {
         case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run", "gate.humanApproval", "gate.expression":
             .read
+        case "gate.agentRecommendation":
+            .read
         case "appStorage.insert", "appStorage.update", "notification.show", "task.createDraft":
             .localWrite
         case "capability.write", "task.createAndRun":
@@ -937,7 +1033,8 @@ struct WorkspaceAppActionExecutor {
         let table = input.table ?? "none"
         let taskGoal = input.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "present" : "none"
         let exportFormat = input.exportFormat ?? "none"
-        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal); confirmedDestructive=\(input.confirmedDestructive); confirmedApproval=\(input.confirmedApproval)"
+        let agentDecision = input.agentRecommendationDecision?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "present" : "none"
+        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal); confirmedDestructive=\(input.confirmedDestructive); confirmedApproval=\(input.confirmedApproval); agentRecommendationDecision=\(agentDecision)"
     }
 
     private func isPermissionError(_ error: Error) -> Bool {
@@ -947,10 +1044,32 @@ struct WorkspaceAppActionExecutor {
         if case WorkspaceAppActionExecutionError.approvalRequired = error {
             return true
         }
+        if case WorkspaceAppActionExecutionError.agentRecommendationRequired = error {
+            return true
+        }
         if case WorkspaceAppActionExecutionError.gateBlocked = error {
             return true
         }
         return false
+    }
+
+    private func agentRecommendationPayload(
+        action: WorkspaceAppActionSpec,
+        prompt: String,
+        policyMode: String,
+        decision: String?,
+        requiresApproval: Bool
+    ) -> [String: WorkspaceAppStorageValue] {
+        [
+            "actionID": .text(action.id),
+            "prompt": .text(prompt),
+            "decisions": .text(action.agentDecisions.joined(separator: ",")),
+            "decision": .text(decision ?? ""),
+            "policyMode": .text(policyMode),
+            "tokenBudget": .integer(Int64(action.agentTokenBudget ?? 0)),
+            "requiresApproval": .bool(requiresApproval),
+            "inputBindings": .text(action.agentInputBindings.joined(separator: ","))
+        ]
     }
 
     private func evaluateExpressionGate(

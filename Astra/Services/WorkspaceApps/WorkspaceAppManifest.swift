@@ -277,6 +277,12 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var taskGoal: String?
     var approvalPrompt: String?
     var approvalDecisions: [String]
+    var agentPrompt: String?
+    var agentInputBindings: [String]
+    var agentDecisions: [String]
+    var agentPolicyMode: String?
+    var agentTokenBudget: Int?
+    var agentRequiresApproval: Bool
     var gateField: String?
     var gateOperator: String?
     var gateValue: WorkspaceAppStorageValue?
@@ -295,6 +301,12 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         case taskGoal
         case approvalPrompt
         case approvalDecisions
+        case agentPrompt
+        case agentInputBindings
+        case agentDecisions
+        case agentPolicyMode
+        case agentTokenBudget
+        case agentRequiresApproval
         case gateField
         case gateOperator
         case gateValue
@@ -314,6 +326,12 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         taskGoal: String? = nil,
         approvalPrompt: String? = nil,
         approvalDecisions: [String] = [],
+        agentPrompt: String? = nil,
+        agentInputBindings: [String] = [],
+        agentDecisions: [String] = [],
+        agentPolicyMode: String? = nil,
+        agentTokenBudget: Int? = nil,
+        agentRequiresApproval: Bool = false,
         gateField: String? = nil,
         gateOperator: String? = nil,
         gateValue: WorkspaceAppStorageValue? = nil,
@@ -331,6 +349,12 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.taskGoal = taskGoal
         self.approvalPrompt = approvalPrompt
         self.approvalDecisions = approvalDecisions
+        self.agentPrompt = agentPrompt
+        self.agentInputBindings = agentInputBindings
+        self.agentDecisions = agentDecisions
+        self.agentPolicyMode = agentPolicyMode
+        self.agentTokenBudget = agentTokenBudget
+        self.agentRequiresApproval = agentRequiresApproval
         self.gateField = gateField
         self.gateOperator = gateOperator
         self.gateValue = gateValue
@@ -351,6 +375,12 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         taskGoal = try container.decodeIfPresent(String.self, forKey: .taskGoal)
         approvalPrompt = try container.decodeIfPresent(String.self, forKey: .approvalPrompt)
         approvalDecisions = try container.decodeIfPresent([String].self, forKey: .approvalDecisions) ?? []
+        agentPrompt = try container.decodeIfPresent(String.self, forKey: .agentPrompt)
+        agentInputBindings = try container.decodeIfPresent([String].self, forKey: .agentInputBindings) ?? []
+        agentDecisions = try container.decodeIfPresent([String].self, forKey: .agentDecisions) ?? []
+        agentPolicyMode = try container.decodeIfPresent(String.self, forKey: .agentPolicyMode)
+        agentTokenBudget = try container.decodeIfPresent(Int.self, forKey: .agentTokenBudget)
+        agentRequiresApproval = try container.decodeIfPresent(Bool.self, forKey: .agentRequiresApproval) ?? false
         gateField = try container.decodeIfPresent(String.self, forKey: .gateField)
         gateOperator = try container.decodeIfPresent(String.self, forKey: .gateOperator)
         gateValue = try container.decodeIfPresent(WorkspaceAppStorageValue.self, forKey: .gateValue)

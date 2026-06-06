@@ -371,6 +371,9 @@ enum WorkspaceAppManifestValidator {
                     issues.append(blocker("\(path)/gateValue", "Expression gate operator '\(normalizedOperator)' must declare a comparison value."))
                 }
             }
+            if action.type == "gate.agentRecommendation" {
+                validateAgentRecommendationGate(action, path: path, issues: &issues)
+            }
         }
 
         for (index, action) in actions.enumerated() where action.type == "pipeline.run" {
@@ -389,6 +392,48 @@ enum WorkspaceAppManifestValidator {
             }
         }
         return actionIDs
+    }
+
+    private static func validateAgentRecommendationGate(
+        _ action: WorkspaceAppActionSpec,
+        path: String,
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        if action.agentPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+            issues.append(blocker("\(path)/agentPrompt", "Agent recommendation gate must declare an agent prompt."))
+        }
+        if action.agentDecisions.isEmpty {
+            issues.append(blocker("\(path)/agentDecisions", "Agent recommendation gate must declare available decisions."))
+        }
+        for (decisionIndex, decision) in action.agentDecisions.enumerated() {
+            validateIdentifier(
+                decision,
+                path: "\(path)/agentDecisions/\(decisionIndex)",
+                label: "Agent recommendation decision",
+                issues: &issues
+            )
+        }
+        for (bindingIndex, binding) in action.agentInputBindings.enumerated() {
+            validateIdentifier(
+                binding,
+                path: "\(path)/agentInputBindings/\(bindingIndex)",
+                label: "Agent recommendation input binding",
+                issues: &issues
+            )
+        }
+        let policyMode = action.agentPolicyMode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if policyMode.isEmpty {
+            issues.append(blocker("\(path)/agentPolicyMode", "Agent recommendation gate must declare a policy mode."))
+        } else if !["advisory", "blocking", "approvalRequired"].contains(policyMode) {
+            issues.append(blocker("\(path)/agentPolicyMode", "Agent recommendation policy mode '\(policyMode)' is not supported."))
+        }
+        if let tokenBudget = action.agentTokenBudget {
+            if tokenBudget <= 0 {
+                issues.append(blocker("\(path)/agentTokenBudget", "Agent recommendation token budget must be positive."))
+            }
+        } else {
+            issues.append(blocker("\(path)/agentTokenBudget", "Agent recommendation gate must declare a token budget."))
+        }
     }
 
     private static func validateAutomations(

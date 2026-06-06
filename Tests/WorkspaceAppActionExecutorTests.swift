@@ -584,6 +584,86 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("pipeline agent recommendation gates require decision and configured approval")
+    func pipelineAgentRecommendationGatesRequireDecisionAndConfiguredApproval() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        #expect(throws: WorkspaceAppActionExecutionError.agentRecommendationRequired("agentGate")) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "agentPipeline",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                modelContext: fixture.context
+            )
+        }
+        #expect(throws: WorkspaceAppActionExecutionError.gateBlocked("agentGate")) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "agentPipeline",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                input: WorkspaceAppActionInput(agentRecommendationDecision: "skip"),
+                modelContext: fixture.context
+            )
+        }
+        #expect(throws: WorkspaceAppActionExecutionError.approvalRequired("agentGate")) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "agentPipeline",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                input: WorkspaceAppActionInput(agentRecommendationDecision: "proceed"),
+                modelContext: fixture.context
+            )
+        }
+
+        let acceptedResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "agentPipeline",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                confirmedApproval: true,
+                agentRecommendationDecision: "proceed"
+            ),
+            modelContext: fixture.context
+        )
+
+        #expect(acceptedResult.run.status == .completed)
+        #expect(acceptedResult.outputSummary.contains("agentGate: Agent recommendation gate 'agentGate' accepted 'proceed'."))
+        #expect(acceptedResult.outputSummary.contains("exportItems: Exported items.csv."))
+        #expect(acceptedResult.run.linkedArtifactPath?.contains("items.csv") == true)
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == acceptedResult.run.id }
+        #expect(events.contains {
+            $0.type == "workspaceApp.agentRecommendation.accepted" &&
+                $0.payload.contains("\"decision\":\"proceed\"") &&
+                $0.payload.contains("\"policyMode\":\"approvalRequired\"") &&
+                $0.payload.contains("\"tokenBudget\":500")
+        })
+        #expect(events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("agentGate") })
+        #expect(events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("exportItems") })
+    }
+
+    @MainActor
     @Test("read-only apps block local write actions and record blocked runs")
     func readOnlyAppsBlockLocalWriteActionsAndRecordBlockedRuns() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
@@ -843,6 +923,23 @@ struct WorkspaceAppActionExecutorTests {
                     type: "pipeline.run",
                     label: "Ready Pipeline",
                     steps: ["readyGate", "exportItems"]
+                ),
+                WorkspaceAppActionSpec(
+                    id: "agentGate",
+                    type: "gate.agentRecommendation",
+                    label: "Recommend Export",
+                    agentPrompt: "Review the current grocery rows and recommend whether the export should proceed.",
+                    agentInputBindings: ["items"],
+                    agentDecisions: ["proceed", "hold"],
+                    agentPolicyMode: "approvalRequired",
+                    agentTokenBudget: 500,
+                    agentRequiresApproval: true
+                ),
+                WorkspaceAppActionSpec(
+                    id: "agentPipeline",
+                    type: "pipeline.run",
+                    label: "Agent Pipeline",
+                    steps: ["agentGate", "exportItems"]
                 )
             ],
             permissions: WorkspaceAppPermissions(
