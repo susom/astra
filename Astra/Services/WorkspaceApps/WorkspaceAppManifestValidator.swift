@@ -41,10 +41,11 @@ enum WorkspaceAppManifestValidator {
 
         let requirementIDs = validateRequirements(manifest.requirements, issues: &issues)
         let storageTables = validateStorage(manifest.storage, issues: &issues)
-        validateSources(manifest.sources, requirementIDs: requirementIDs, issues: &issues)
+        let sourceIDs = validateSources(manifest.sources, requirementIDs: requirementIDs, issues: &issues)
         let actionIDs = validateActions(
             manifest.actions,
             requirementIDs: requirementIDs,
+            sourceIDs: sourceIDs,
             storageTables: storageTables,
             issues: &issues
         )
@@ -125,7 +126,7 @@ enum WorkspaceAppManifestValidator {
         _ sources: [WorkspaceAppSource],
         requirementIDs: Set<String>,
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
-    ) {
+    ) -> Set<String> {
         var seen = Set<String>()
         for (index, source) in sources.enumerated() {
             let path = "/sources/\(index)"
@@ -141,6 +142,7 @@ enum WorkspaceAppManifestValidator {
                 issues.append(blocker("\(path)/requirementRef", "Source references unknown requirement '\(requirementRef)'."))
             }
         }
+        return seen
     }
 
     private static func validateViews(
@@ -279,6 +281,7 @@ enum WorkspaceAppManifestValidator {
     private static func validateActions(
         _ actions: [WorkspaceAppActionSpec],
         requirementIDs: Set<String>,
+        sourceIDs: Set<String>,
         storageTables: [String: Set<String>],
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
     ) -> Set<String> {
@@ -303,6 +306,14 @@ enum WorkspaceAppManifestValidator {
             }
             if let table = action.table {
                 validateStorageTableReference(table, path: "\(path)/table", storageTables: storageTables, issues: &issues)
+            }
+            if action.type == "capability.read" {
+                if action.sourceRef?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    issues.append(blocker("\(path)/sourceRef", "Capability read action must declare a source reference."))
+                } else if let sourceRef = action.sourceRef,
+                          !sourceIDs.contains(sourceRef) {
+                    issues.append(blocker("\(path)/sourceRef", "Capability read action references unknown source '\(sourceRef)'."))
+                }
             }
             if action.type == "artifact.export",
                let format = action.exportFormat?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),

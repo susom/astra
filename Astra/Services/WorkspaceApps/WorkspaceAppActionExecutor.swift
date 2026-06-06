@@ -6,6 +6,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case unsupportedActionType(String)
     case missingTable
     case missingRecord
+    case missingSource
     case missingPrimaryKey(String)
     case missingTaskGoal
     case missingPipelineSteps(String)
@@ -25,6 +26,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app storage action requires a table."
         case .missingRecord:
             "Workspace app storage write action requires a record."
+        case .missingSource:
+            "Workspace app capability read action requires a source."
         case .missingPrimaryKey(let table):
             "Workspace app storage table '\(table)' must declare a primary key for this action."
         case .missingTaskGoal:
@@ -170,6 +173,7 @@ struct WorkspaceAppRunRecorder {
 
 struct WorkspaceAppActionExecutor {
     var storageService = WorkspaceAppStorageService()
+    var sourceResolver = WorkspaceAppSourceResolver()
     var recorder = WorkspaceAppRunRecorder()
 
     @MainActor
@@ -178,6 +182,7 @@ struct WorkspaceAppActionExecutor {
         app: WorkspaceApp,
         workspace: Workspace,
         manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding] = [],
         input: WorkspaceAppActionInput = WorkspaceAppActionInput(),
         trigger: WorkspaceAppRunTrigger = .user,
         modelContext: ModelContext
@@ -198,6 +203,7 @@ struct WorkspaceAppActionExecutor {
                 app: app,
                 workspace: workspace,
                 manifest: manifest,
+                dependencyBindings: dependencyBindings,
                 input: input,
                 run: run,
                 modelContext: modelContext
@@ -287,6 +293,7 @@ struct WorkspaceAppActionExecutor {
         app: WorkspaceApp,
         workspace: Workspace,
         manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding],
         input: WorkspaceAppActionInput,
         run: WorkspaceAppRun,
         modelContext: ModelContext
@@ -353,6 +360,17 @@ struct WorkspaceAppActionExecutor {
             } catch {
                 throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
             }
+        case "capability.read":
+            return try executeCapabilityRead(
+                action: action,
+                app: app,
+                workspace: workspace,
+                manifest: manifest,
+                dependencyBindings: dependencyBindings,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
         case "artifact.export":
             let artifactURL = try exportStorageArtifact(
                 action: action,
@@ -408,6 +426,7 @@ struct WorkspaceAppActionExecutor {
                 app: app,
                 workspace: workspace,
                 manifest: manifest,
+                dependencyBindings: dependencyBindings,
                 input: input,
                 run: run,
                 modelContext: modelContext
@@ -506,11 +525,61 @@ struct WorkspaceAppActionExecutor {
         return ([], "Expression gate '\(action.id)' passed.", nil, nil)
     }
 
+    private func executeCapabilityRead(
+        action: WorkspaceAppActionSpec,
+        app: WorkspaceApp,
+        workspace: Workspace,
+        manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding],
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let sourceID = normalized(action.sourceRef, input.table, action.table, fallback: "")
+        guard !sourceID.isEmpty else {
+            throw WorkspaceAppActionExecutionError.missingSource
+        }
+        let resolved = try sourceResolver.resolve(
+            sourceID: sourceID,
+            app: app,
+            workspace: workspace,
+            manifest: manifest,
+            dependencyBindings: dependencyBindings,
+            input: WorkspaceAppSourceResolutionInput(limit: input.limit, parameters: input.record)
+        )
+        var payload: [String: WorkspaceAppStorageValue] = [
+            "sourceID": .text(resolved.sourceID),
+            "rowCount": .integer(Int64(resolved.rows.count))
+        ]
+        if let requirementID = resolved.requirementID {
+            payload["requirementID"] = .text(requirementID)
+        }
+        if let implementationID = resolved.implementationID {
+            payload["implementationID"] = .text(implementationID)
+        }
+        if let provider = resolved.provider {
+            payload["provider"] = .text(provider)
+        }
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.capability.read",
+            payload: payload,
+            modelContext: modelContext
+        )
+        return (resolved.rows, resolved.outputSummary, nil, nil)
+    }
+
     private func executePipeline(
         action: WorkspaceAppActionSpec,
         app: WorkspaceApp,
         workspace: Workspace,
         manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding],
         input: WorkspaceAppActionInput,
         run: WorkspaceAppRun,
         modelContext: ModelContext
@@ -537,6 +606,7 @@ struct WorkspaceAppActionExecutor {
                 app: app,
                 workspace: workspace,
                 manifest: manifest,
+                dependencyBindings: dependencyBindings,
                 input: input,
                 run: run,
                 modelContext: modelContext

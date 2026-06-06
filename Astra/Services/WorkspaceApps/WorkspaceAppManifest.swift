@@ -265,6 +265,7 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var label: String?
     var requirementRef: String?
     var operation: String?
+    var sourceRef: String?
     var table: String?
     var exportFormat: String?
     var taskTitle: String?
@@ -282,6 +283,7 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         case label
         case requirementRef
         case operation
+        case sourceRef
         case table
         case exportFormat
         case taskTitle
@@ -300,6 +302,7 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         label: String? = nil,
         requirementRef: String? = nil,
         operation: String? = nil,
+        sourceRef: String? = nil,
         table: String? = nil,
         exportFormat: String? = nil,
         taskTitle: String? = nil,
@@ -316,6 +319,7 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.label = label
         self.requirementRef = requirementRef
         self.operation = operation
+        self.sourceRef = sourceRef
         self.table = table
         self.exportFormat = exportFormat
         self.taskTitle = taskTitle
@@ -335,6 +339,7 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         label = try container.decodeIfPresent(String.self, forKey: .label)
         requirementRef = try container.decodeIfPresent(String.self, forKey: .requirementRef)
         operation = try container.decodeIfPresent(String.self, forKey: .operation)
+        sourceRef = try container.decodeIfPresent(String.self, forKey: .sourceRef)
         table = try container.decodeIfPresent(String.self, forKey: .table)
         exportFormat = try container.decodeIfPresent(String.self, forKey: .exportFormat)
         taskTitle = try container.decodeIfPresent(String.self, forKey: .taskTitle)

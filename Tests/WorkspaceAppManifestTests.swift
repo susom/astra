@@ -342,6 +342,34 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects capability reads without declared sources")
+    func validationRejectsCapabilityReadsWithoutDeclaredSources() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "read_missing_source",
+                type: "capability.read",
+                label: "Read Missing"
+            ),
+            WorkspaceAppActionSpec(
+                id: "read_unknown_source",
+                type: "capability.read",
+                label: "Read Unknown",
+                sourceRef: "unknown_source"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/sourceRef" && $0.message.contains("source reference")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/1/sourceRef" && $0.message.contains("unknown_source")
+        })
+    }
+
     @Test("manifest encoding preserves native widget specs")
     func manifestEncodingPreservesNativeWidgetSpecs() throws {
         let manifest = Self.reconciliationManifest()

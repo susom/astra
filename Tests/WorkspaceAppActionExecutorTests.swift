@@ -285,7 +285,61 @@ struct WorkspaceAppActionExecutorTests {
         let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
         #expect(events.contains { event in
             event.type == "workspaceApp.task.created" &&
-                event.payload.contains(task.id.uuidString)
+            event.payload.contains(task.id.uuidString)
+        })
+    }
+
+    @MainActor
+    @Test("capability read actions resolve mapped sources")
+    func capabilityReadActionsResolveMappedSources() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: fixture.workspace.id,
+            appID: fixture.app.id,
+            appLogicalID: fixture.app.logicalID,
+            requirementID: "warehouse",
+            contract: "tabularQuery.read",
+            operations: ["runReadOnlyQuery"],
+            optional: false,
+            status: .mapped,
+            implementationID: "bigquery-read-task-backed",
+            provider: "bigQuery",
+            transport: .taskBacked
+        )
+        let executor = WorkspaceAppActionExecutor(
+            sourceResolver: WorkspaceAppSourceResolver(
+                capabilityClient: MockWorkspaceAppCapabilitySourceClient(rowsBySourceID: [
+                    "warehouseLatest": [
+                        ["participant_id": .text("P-001"), "updated_at": .text("2026-06-05")]
+                    ]
+                ])
+            )
+        )
+
+        let result = try executor.execute(
+            actionID: "readWarehouse",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            dependencyBindings: [binding],
+            input: WorkspaceAppActionInput(limit: 25),
+            modelContext: fixture.context
+        )
+
+        #expect(result.run.status == .completed)
+        #expect(result.rows == [["participant_id": .text("P-001"), "updated_at": .text("2026-06-05")]])
+        #expect(result.outputSummary.contains("warehouseLatest"))
+        #expect(result.outputSummary.contains("bigquery-read-task-backed"))
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == result.run.id }
+        #expect(events.contains {
+            $0.type == "workspaceApp.capability.read" &&
+                $0.payload.contains("\"sourceID\":\"warehouseLatest\"") &&
+                $0.payload.contains("\"implementationID\":\"bigquery-read-task-backed\"") &&
+                $0.payload.contains("\"provider\":\"bigQuery\"") &&
+                $0.payload.contains("\"rowCount\":1")
         })
     }
 
@@ -595,6 +649,12 @@ struct WorkspaceAppActionExecutorTests {
                     id: "localRecords",
                     contract: "appStorage.records",
                     operations: ["insertRecord", "queryRecords"]
+                ),
+                WorkspaceAppRequirement(
+                    id: "warehouse",
+                    contract: "tabularQuery.read",
+                    operations: ["runReadOnlyQuery"],
+                    providerHint: "bigQuery"
                 )
             ],
             storage: WorkspaceAppStorageSchema(tables: [
@@ -604,6 +664,15 @@ struct WorkspaceAppActionExecutorTests {
                     WorkspaceAppStorageColumn(name: "category", type: "text")
                 ])
             ]),
+            sources: [
+                WorkspaceAppSource(
+                    id: "warehouseLatest",
+                    requirementRef: "warehouse",
+                    operation: "runReadOnlyQuery",
+                    mode: "read",
+                    tableRef: "clinical.enrollment_candidates"
+                )
+            ],
             views: [
                 WorkspaceAppViewSpec(id: "items", type: "table", title: "Items")
             ],
@@ -648,6 +717,14 @@ struct WorkspaceAppActionExecutorTests {
                     label: "Run Review Task",
                     taskTitle: "Run grocery review",
                     taskGoal: "Run the grocery review workflow and summarize the required follow-up."
+                ),
+                WorkspaceAppActionSpec(
+                    id: "readWarehouse",
+                    type: "capability.read",
+                    label: "Read Warehouse",
+                    requirementRef: "warehouse",
+                    operation: "runReadOnlyQuery",
+                    sourceRef: "warehouseLatest"
                 ),
                 WorkspaceAppActionSpec(
                     id: "exportItems",
@@ -696,5 +773,18 @@ struct WorkspaceAppActionExecutorTests {
                 defaultMode: permissionMode
             )
         )
+    }
+}
+
+private struct MockWorkspaceAppCapabilitySourceClient: WorkspaceAppCapabilitySourceClient {
+    var rowsBySourceID: [String: [[String: WorkspaceAppStorageValue]]]
+
+    func read(
+        source: WorkspaceAppSource,
+        requirement: WorkspaceAppRequirement,
+        binding: WorkspaceAppDependencyBinding,
+        input: WorkspaceAppSourceResolutionInput
+    ) throws -> [[String: WorkspaceAppStorageValue]] {
+        rowsBySourceID[source.id] ?? []
     }
 }
