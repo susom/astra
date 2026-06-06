@@ -214,6 +214,10 @@ enum WorkspaceAppManifestValidator {
             if let groupBy = widget.groupBy {
                 validateStorageFieldReference(groupBy, table: table, path: "\(path)/groupBy", storageTables: storageTables, issues: &issues)
             }
+        case "markdown":
+            if widget.markdownContent?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                issues.append(blocker("\(path)/markdownContent", "Markdown widget content is required."))
+            }
         case "webView":
             validateWebViewWidget(widget, path: path, actionIDs: actionIDs, issues: &issues)
         default:

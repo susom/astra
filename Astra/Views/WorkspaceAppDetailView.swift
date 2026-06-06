@@ -238,11 +238,15 @@ struct WorkspaceAppDetailView: View {
                         .font(Stanford.ui(15, weight: .semibold))
                         .foregroundStyle(.primary)
 
-                    Text("\(surface.metrics.count + surface.charts.count) widgets")
+                    Text("\(surface.markdowns.count + surface.metrics.count + surface.charts.count) widgets")
                         .font(Stanford.caption(11).weight(.medium))
                         .foregroundStyle(.secondary)
 
                     Spacer()
+                }
+
+                ForEach(surface.markdowns) { markdown in
+                    WorkspaceAppMarkdownCard(markdown: markdown)
                 }
 
                 if !surface.metrics.isEmpty {
@@ -529,6 +533,40 @@ struct WorkspaceAppDetailView: View {
         } catch {
             packageStatusMessage = String(describing: error)
         }
+    }
+}
+
+private struct WorkspaceAppMarkdownCard: View {
+    let markdown: WorkspaceAppMarkdownPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(markdown.label)
+                .font(Stanford.ui(13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            Text(attributedContent)
+                .font(Stanford.caption(12))
+                .foregroundStyle(.secondary)
+                .lineSpacing(3)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(14)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var attributedContent: AttributedString {
+        (try? AttributedString(
+            markdown: markdown.content,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(markdown.content)
     }
 }
 

@@ -69,11 +69,12 @@ struct WorkspaceAppManifestInspectorPresentation: Equatable {
 }
 
 struct WorkspaceAppNativeSurfacePresentation: Equatable {
+    var markdowns: [WorkspaceAppMarkdownPresentation]
     var metrics: [WorkspaceAppMetricPresentation]
     var charts: [WorkspaceAppChartPresentation]
 
     var isEmpty: Bool {
-        metrics.isEmpty && charts.isEmpty
+        markdowns.isEmpty && metrics.isEmpty && charts.isEmpty
     }
 }
 
@@ -101,6 +102,12 @@ struct WorkspaceAppMetricPresentation: Identifiable, Equatable {
     var label: String
     var value: String
     var detail: String
+}
+
+struct WorkspaceAppMarkdownPresentation: Identifiable, Equatable {
+    var id: String
+    var label: String
+    var content: String
 }
 
 struct WorkspaceAppChartPresentation: Identifiable, Equatable {
@@ -546,31 +553,58 @@ enum WorkspaceAppNativeSurfaceBuilder {
         storageTables: [WorkspaceAppStorageTableSnapshot]
     ) -> WorkspaceAppNativeSurfacePresentation {
         guard let manifest else {
-            return WorkspaceAppNativeSurfacePresentation(metrics: [], charts: [])
+            return WorkspaceAppNativeSurfacePresentation(markdowns: [], metrics: [], charts: [])
         }
 
         let tablesByName = Dictionary(uniqueKeysWithValues: storageTables.map { ($0.name, $0) })
+        var markdowns: [WorkspaceAppMarkdownPresentation] = []
         var metrics: [WorkspaceAppMetricPresentation] = []
         var charts: [WorkspaceAppChartPresentation] = []
 
         for view in manifest.views {
             for widget in view.widgets {
-                let tableName = widget.table ?? view.table
-                guard let tableName, let table = tablesByName[tableName], table.errorMessage == nil else {
-                    continue
-                }
                 switch widget.type {
+                case "markdown":
+                    if let markdown = markdown(widget: widget) {
+                        markdowns.append(markdown)
+                    }
                 case "metric":
-                    metrics.append(metric(widget: widget, table: table))
+                    if let table = table(for: widget, view: view, tablesByName: tablesByName) {
+                        metrics.append(metric(widget: widget, table: table))
+                    }
                 case "chart":
-                    charts.append(chart(widget: widget, table: table))
+                    if let table = table(for: widget, view: view, tablesByName: tablesByName) {
+                        charts.append(chart(widget: widget, table: table))
+                    }
                 default:
                     continue
                 }
             }
         }
 
-        return WorkspaceAppNativeSurfacePresentation(metrics: metrics, charts: charts)
+        return WorkspaceAppNativeSurfacePresentation(markdowns: markdowns, metrics: metrics, charts: charts)
+    }
+
+    private static func table(
+        for widget: WorkspaceAppWidgetSpec,
+        view: WorkspaceAppViewSpec,
+        tablesByName: [String: WorkspaceAppStorageTableSnapshot]
+    ) -> WorkspaceAppStorageTableSnapshot? {
+        let tableName = widget.table ?? view.table
+        guard let tableName, let table = tablesByName[tableName], table.errorMessage == nil else {
+            return nil
+        }
+        return table
+    }
+
+    private static func markdown(widget: WorkspaceAppWidgetSpec) -> WorkspaceAppMarkdownPresentation? {
+        let content = widget.markdownContent?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !content.isEmpty else { return nil }
+        return WorkspaceAppMarkdownPresentation(
+            id: widget.id,
+            label: widget.label,
+            content: content
+        )
     }
 
     private static func metric(

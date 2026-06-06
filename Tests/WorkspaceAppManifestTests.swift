@@ -125,6 +125,34 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects empty markdown widgets")
+    func validationRejectsEmptyMarkdownWidgets() {
+        var manifest = Self.reconciliationManifest()
+        manifest.views = [
+            WorkspaceAppViewSpec(
+                id: "overview",
+                type: "dashboard",
+                title: "Overview",
+                widgets: [
+                    WorkspaceAppWidgetSpec(
+                        id: "instructions",
+                        type: "markdown",
+                        label: "Instructions",
+                        markdownContent: "   "
+                    )
+                ]
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/markdownContent" && $0.message.contains("Markdown widget content")
+        })
+    }
+
+
     @Test("WebView bridge only accepts declared widget action requests")
     func webViewBridgeOnlyAcceptsDeclaredWidgetActions() {
         var manifest = Self.reconciliationManifest()
@@ -411,17 +439,27 @@ struct WorkspaceAppManifestTests {
 
     @Test("manifest encoding preserves native widget specs")
     func manifestEncodingPreservesNativeWidgetSpecs() throws {
-        let manifest = Self.reconciliationManifest()
+        var manifest = Self.reconciliationManifest()
+        manifest.views[0].widgets.append(WorkspaceAppWidgetSpec(
+            id: "review_notes",
+            type: "markdown",
+            label: "Review notes",
+            markdownContent: "**Check** missing records before export."
+        ))
         let data = try WorkspaceAppService.encodeManifest(manifest)
         let decoded = try JSONDecoder().decode(WorkspaceAppManifest.self, from: data)
         let view = try #require(decoded.views.first)
         let widget = try #require(view.widgets.first)
+        let markdown = try #require(view.widgets.last)
 
         #expect(view.table == "review_items")
         #expect(widget.id == "review_count")
         #expect(widget.type == "metric")
         #expect(widget.table == nil)
         #expect(widget.aggregation == "count")
+        #expect(markdown.id == "review_notes")
+        #expect(markdown.type == "markdown")
+        #expect(markdown.markdownContent == "**Check** missing records before export.")
     }
 
     @Test("manifest decoding keeps legacy view specs without widgets compatible")

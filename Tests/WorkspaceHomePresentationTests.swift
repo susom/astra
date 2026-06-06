@@ -498,6 +498,12 @@ struct WorkspaceHomePresentationTests {
                     table: "purchases",
                     widgets: [
                         WorkspaceAppWidgetSpec(
+                            id: "review_note",
+                            type: "markdown",
+                            label: "Review note",
+                            markdownContent: "Use **reviewed** purchase records."
+                        ),
+                        WorkspaceAppWidgetSpec(
                             id: "purchase_count",
                             type: "metric",
                             label: "Purchases",
@@ -538,6 +544,13 @@ struct WorkspaceHomePresentationTests {
             storageTables: [snapshot]
         )
 
+        #expect(surface.markdowns == [
+            WorkspaceAppMarkdownPresentation(
+                id: "review_note",
+                label: "Review note",
+                content: "Use **reviewed** purchase records."
+            )
+        ])
         #expect(surface.metrics.map(\.id) == ["purchase_count", "total_spend"])
         #expect(surface.metrics[0].value == "3")
         #expect(surface.metrics[0].detail == "purchases records")

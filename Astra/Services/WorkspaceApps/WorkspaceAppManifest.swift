@@ -203,6 +203,7 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
     var field: String?
     var groupBy: String?
     var aggregation: String?
+    var markdownContent: String?
     var webRenderer: String?
     var allowedActions: [String]
     var requiredAssets: [String]
@@ -215,6 +216,7 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
         case field
         case groupBy
         case aggregation
+        case markdownContent
         case webRenderer
         case allowedActions
         case requiredAssets
@@ -228,6 +230,7 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
         field: String? = nil,
         groupBy: String? = nil,
         aggregation: String? = nil,
+        markdownContent: String? = nil,
         webRenderer: String? = nil,
         allowedActions: [String] = [],
         requiredAssets: [String] = []
@@ -239,6 +242,7 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
         self.field = field
         self.groupBy = groupBy
         self.aggregation = aggregation
+        self.markdownContent = markdownContent
         self.webRenderer = webRenderer
         self.allowedActions = allowedActions
         self.requiredAssets = requiredAssets
@@ -253,6 +257,7 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
         field = try container.decodeIfPresent(String.self, forKey: .field)
         groupBy = try container.decodeIfPresent(String.self, forKey: .groupBy)
         aggregation = try container.decodeIfPresent(String.self, forKey: .aggregation)
+        markdownContent = try container.decodeIfPresent(String.self, forKey: .markdownContent)
         webRenderer = try container.decodeIfPresent(String.self, forKey: .webRenderer)
         allowedActions = try container.decodeIfPresent([String].self, forKey: .allowedActions) ?? []
         requiredAssets = try container.decodeIfPresent([String].self, forKey: .requiredAssets) ?? []
