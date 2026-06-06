@@ -942,6 +942,139 @@ struct WorkspaceAppManifestTests {
         #expect(fetched.lastRefreshedAt == refreshedAt)
     }
 
+    @MainActor
+    @Test("service duplicates app manifest metadata and local storage")
+    func serviceDuplicatesAppManifestMetadataAndLocalStorage() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-duplicate-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let workspace = Workspace(name: "Apps", primaryPath: root.path)
+        context.insert(workspace)
+
+        let service = WorkspaceAppService()
+        let result = try service.createApp(
+            manifest: Self.reconciliationManifest(),
+            in: workspace,
+            modelContext: context
+        )
+        let originalDatabaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
+            workspacePath: workspace.primaryPath,
+            appID: result.app.logicalID
+        ))
+        try WorkspaceAppStorageService().insertRecord(
+            [
+                "id": .text("review-1"),
+                "source_record_id": .text("P-001"),
+                "match_status": .text("missing")
+            ],
+            into: "review_items",
+            databaseURL: originalDatabaseURL
+        )
+
+        let duplicate = try service.duplicateApp(
+            result.app,
+            in: workspace,
+            modelContext: context,
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        #expect(duplicate.app.id != result.app.id)
+        #expect(duplicate.app.logicalID == "enrollment-reconciliation-copy")
+        #expect(duplicate.app.name == "Enrollment Reconciliation Copy")
+        #expect(duplicate.app.manifestRelativePath == ".astra/apps/enrollment-reconciliation-copy/manifest.json")
+        #expect(FileManager.default.fileExists(atPath: duplicate.manifestURL.path))
+
+        let duplicateManifest = try JSONDecoder().decode(
+            WorkspaceAppManifest.self,
+            from: Data(contentsOf: duplicate.manifestURL)
+        )
+        #expect(duplicateManifest.app.id == "enrollment-reconciliation-copy")
+        #expect(duplicateManifest.app.name == "Enrollment Reconciliation Copy")
+
+        let duplicateDatabaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
+            workspacePath: workspace.primaryPath,
+            appID: duplicate.app.logicalID
+        ))
+        let rows = try WorkspaceAppStorageService().records(in: "review_items", databaseURL: duplicateDatabaseURL)
+        #expect(rows.count == 1)
+        #expect(rows[0]["source_record_id"] == .text("P-001"))
+        #expect(rows[0]["match_status"] == .text("missing"))
+
+        let apps = try context.fetch(FetchDescriptor<WorkspaceApp>())
+        #expect(apps.map(\.logicalID).sorted() == ["enrollment-reconciliation", "enrollment-reconciliation-copy"])
+
+        let duplicateBindings = try service.dependencyBindings(for: duplicate.app, modelContext: context)
+        #expect(duplicateBindings.count == 2)
+        #expect(duplicateBindings.allSatisfy { $0.appID == duplicate.app.id })
+        #expect(duplicateBindings.allSatisfy { $0.appLogicalID == duplicate.app.logicalID })
+    }
+
+    @MainActor
+    @Test("service deletes app files and related domain records")
+    func serviceDeletesAppFilesAndRelatedDomainRecords() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-delete-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let workspace = Workspace(name: "Apps", primaryPath: root.path)
+        context.insert(workspace)
+
+        var manifest = Self.reconciliationManifest()
+        manifest.automations = [
+            WorkspaceAppAutomationSpec(id: "daily-refresh", type: "schedule", action: "refresh")
+        ]
+        let service = WorkspaceAppService()
+        let result = try service.createApp(manifest: manifest, in: workspace, modelContext: context)
+        let appDirectoryURL = URL(fileURLWithPath: workspace.primaryPath)
+            .appendingPathComponent(result.app.appDirectoryRelativePath, isDirectory: true)
+        let run = WorkspaceAppRun(
+            workspaceID: workspace.id,
+            appID: result.app.id,
+            appLogicalID: result.app.logicalID,
+            actionID: "refresh",
+            status: .completed
+        )
+        let event = WorkspaceAppRunEvent(
+            runID: run.id,
+            workspaceID: workspace.id,
+            appID: result.app.id,
+            actionID: "refresh",
+            type: "workspaceApp.action.completed"
+        )
+        context.insert(run)
+        context.insert(event)
+        try context.save()
+
+        try service.deleteApp(
+            result.app,
+            in: workspace,
+            modelContext: context,
+            now: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+
+        #expect(!FileManager.default.fileExists(atPath: appDirectoryURL.path))
+        #expect(try context.fetch(FetchDescriptor<WorkspaceApp>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppDependencyBinding>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppAutomationState>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppRun>()).isEmpty)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppRunEvent>()).isEmpty)
+    }
+
     static func reconciliationManifest() -> WorkspaceAppManifest {
         WorkspaceAppManifest(
             app: WorkspaceAppManifestMetadata(

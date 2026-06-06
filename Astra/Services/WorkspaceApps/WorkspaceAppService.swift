@@ -7,6 +7,8 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
     case emptyWorkspacePath
     case encodeFailed(String)
     case storageFailed(String)
+    case missingManifest(String)
+    case fileOperationFailed(String)
     case missingDependencyBinding(String)
     case missingAutomation(String)
     case missingContractImplementation(String)
@@ -23,6 +25,10 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
             return "Could not encode workspace app manifest: \(message)"
         case .storageFailed(let message):
             return "Could not initialize workspace app storage: \(message)"
+        case .missingManifest(let path):
+            return "Workspace app manifest is missing at \(path)."
+        case .fileOperationFailed(let message):
+            return "Workspace app file operation failed: \(message)"
         case .missingDependencyBinding(let requirementID):
             return "Workspace app dependency requirement '\(requirementID)' was not found."
         case .missingAutomation(let automationID):
@@ -252,6 +258,162 @@ struct WorkspaceAppService {
     }
 
     @MainActor
+    func duplicateApp(
+        _ app: WorkspaceApp,
+        in workspace: Workspace,
+        modelContext: ModelContext,
+        now: Date = Date()
+    ) throws -> WorkspaceAppCreationResult {
+        guard !workspace.primaryPath.isEmpty else {
+            throw WorkspaceAppServiceError.emptyWorkspacePath
+        }
+        let sourceDirectory = URL(fileURLWithPath: workspace.primaryPath)
+            .appendingPathComponent(app.appDirectoryRelativePath, isDirectory: true)
+        let sourceManifestURL = URL(fileURLWithPath: workspace.primaryPath)
+            .appendingPathComponent(app.manifestRelativePath)
+        guard fileManager.fileExists(atPath: sourceManifestURL.path) else {
+            throw WorkspaceAppServiceError.missingManifest(sourceManifestURL.path)
+        }
+
+        var manifest: WorkspaceAppManifest
+        do {
+            manifest = try JSONDecoder().decode(
+                WorkspaceAppManifest.self,
+                from: Data(contentsOf: sourceManifestURL)
+            )
+        } catch {
+            throw WorkspaceAppServiceError.fileOperationFailed(String(describing: error))
+        }
+
+        let existingLogicalIDs = try existingLogicalIDs(in: workspace, modelContext: modelContext)
+        let baseID = "\(manifest.app.id)-copy"
+        let logicalID = uniqueLogicalID(base: baseID, existingLogicalIDs: existingLogicalIDs)
+        manifest.app.id = logicalID
+        manifest.app.name = uniqueDisplayName(base: "\(manifest.app.name) Copy", existingNames: try existingNames(in: workspace, modelContext: modelContext))
+
+        let destinationDirectory = URL(fileURLWithPath: WorkspaceFileLayout.appDirectory(
+            workspacePath: workspace.primaryPath,
+            appID: logicalID
+        ), isDirectory: true)
+        do {
+            try fileManager.copyItem(at: sourceDirectory, to: destinationDirectory)
+            let manifestData = try Self.encodeManifest(manifest)
+            try manifestData.write(
+                to: destinationDirectory.appendingPathComponent("manifest.json"),
+                options: [.atomic]
+            )
+            let duplicate = WorkspaceApp(
+                workspaceID: workspace.id,
+                logicalID: logicalID,
+                name: manifest.app.name,
+                icon: manifest.app.icon,
+                appDescription: manifest.app.description,
+                lifecycleStatus: app.lifecycleStatus,
+                permissionMode: manifest.permissions.defaultMode,
+                dependencyStatus: .ready,
+                manifestRelativePath: WorkspaceFileLayout.relativeAppManifestFile(appID: logicalID),
+                appDirectoryRelativePath: WorkspaceFileLayout.relativeAppDirectory(appID: logicalID),
+                manifestDigest: Self.digest(for: manifestData),
+                sourcePackageID: app.sourcePackageID,
+                sourcePackageVersion: app.sourcePackageVersion,
+                sourcePackageDigest: app.sourcePackageDigest,
+                createdAt: now,
+                updatedAt: now
+            )
+            let bindings = dependencyBindings(
+                for: manifest.requirements,
+                workspaceID: workspace.id,
+                appID: duplicate.id,
+                appLogicalID: logicalID,
+                now: now
+            )
+            let automations = automationStates(
+                for: manifest.automations,
+                workspaceID: workspace.id,
+                appID: duplicate.id,
+                appLogicalID: logicalID,
+                now: now
+            )
+            duplicate.dependencyStatus = dependencyStatus(for: bindings)
+            modelContext.insert(duplicate)
+            bindings.forEach(modelContext.insert)
+            automations.forEach(modelContext.insert)
+            workspace.updatedAt = now
+            try modelContext.save()
+            WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
+
+            AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+                "resource": "workspace_app",
+                "result": "duplicated",
+                "source_app_id": app.logicalID,
+                "app_id": duplicate.logicalID,
+                "workspace_id": workspace.id.uuidString
+            ])
+
+            return WorkspaceAppCreationResult(
+                app: duplicate,
+                manifestURL: destinationDirectory.appendingPathComponent("manifest.json")
+            )
+        } catch {
+            try? fileManager.removeItem(at: destinationDirectory)
+            throw WorkspaceAppServiceError.fileOperationFailed(String(describing: error))
+        }
+    }
+
+    @MainActor
+    func deleteApp(
+        _ app: WorkspaceApp,
+        in workspace: Workspace?,
+        modelContext: ModelContext,
+        now: Date = Date()
+    ) throws {
+        if let workspace, !workspace.primaryPath.isEmpty {
+            let directory = URL(fileURLWithPath: workspace.primaryPath)
+                .appendingPathComponent(app.appDirectoryRelativePath, isDirectory: true)
+            if fileManager.fileExists(atPath: directory.path) {
+                do {
+                    try fileManager.removeItem(at: directory)
+                } catch {
+                    throw WorkspaceAppServiceError.fileOperationFailed(String(describing: error))
+                }
+            }
+        }
+
+        let appID = app.id
+        for binding in try modelContext.fetch(FetchDescriptor<WorkspaceAppDependencyBinding>(
+            predicate: #Predicate<WorkspaceAppDependencyBinding> { $0.appID == appID }
+        )) {
+            modelContext.delete(binding)
+        }
+        for automation in try modelContext.fetch(FetchDescriptor<WorkspaceAppAutomationState>(
+            predicate: #Predicate<WorkspaceAppAutomationState> { $0.appID == appID }
+        )) {
+            modelContext.delete(automation)
+        }
+        for event in try modelContext.fetch(FetchDescriptor<WorkspaceAppRunEvent>(
+            predicate: #Predicate<WorkspaceAppRunEvent> { $0.appID == appID }
+        )) {
+            modelContext.delete(event)
+        }
+        for run in try modelContext.fetch(FetchDescriptor<WorkspaceAppRun>(
+            predicate: #Predicate<WorkspaceAppRun> { $0.appID == appID }
+        )) {
+            modelContext.delete(run)
+        }
+        modelContext.delete(app)
+        workspace?.updatedAt = now
+        try modelContext.save()
+        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
+
+        AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+            "resource": "workspace_app",
+            "result": "deleted",
+            "app_id": app.logicalID,
+            "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
+        ])
+    }
+
+    @MainActor
     func dependencyBindings(
         for app: WorkspaceApp,
         modelContext: ModelContext
@@ -383,6 +545,52 @@ struct WorkspaceAppService {
             return nil
         }
         return manifest.automations.first { $0.id == automationID }
+    }
+
+    @MainActor
+    private func existingLogicalIDs(
+        in workspace: Workspace,
+        modelContext: ModelContext
+    ) throws -> Set<String> {
+        let workspaceID = workspace.id
+        let descriptor = FetchDescriptor<WorkspaceApp>(
+            predicate: #Predicate<WorkspaceApp> { app in
+                app.workspaceID == workspaceID
+            }
+        )
+        return Set(try modelContext.fetch(descriptor).map(\.logicalID))
+    }
+
+    @MainActor
+    private func existingNames(
+        in workspace: Workspace,
+        modelContext: ModelContext
+    ) throws -> Set<String> {
+        let workspaceID = workspace.id
+        let descriptor = FetchDescriptor<WorkspaceApp>(
+            predicate: #Predicate<WorkspaceApp> { app in
+                app.workspaceID == workspaceID
+            }
+        )
+        return Set(try modelContext.fetch(descriptor).map(\.name))
+    }
+
+    private func uniqueLogicalID(base: String, existingLogicalIDs: Set<String>) -> String {
+        guard existingLogicalIDs.contains(base) else { return base }
+        var suffix = 2
+        while existingLogicalIDs.contains("\(base)-\(suffix)") {
+            suffix += 1
+        }
+        return "\(base)-\(suffix)"
+    }
+
+    private func uniqueDisplayName(base: String, existingNames: Set<String>) -> String {
+        guard existingNames.contains(base) else { return base }
+        var suffix = 2
+        while existingNames.contains("\(base) \(suffix)") {
+            suffix += 1
+        }
+        return "\(base) \(suffix)"
     }
 
     nonisolated static func encodeManifest(_ manifest: WorkspaceAppManifest) throws -> Data {
