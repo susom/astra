@@ -7,6 +7,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingTable
     case missingRecord
     case missingTaskGoal
+    case unsupportedExportFormat(String)
     case permissionDenied(String)
     case storageFailed(String)
 
@@ -22,6 +23,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app storage write action requires a record."
         case .missingTaskGoal:
             "Workspace app task action requires a task goal."
+        case .unsupportedExportFormat(let format):
+            "Workspace app artifact export format '\(format)' is not supported."
         case .permissionDenied(let message):
             message
         case .storageFailed(let message):
@@ -34,6 +37,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
     var table: String?
     var record: [String: WorkspaceAppStorageValue]
     var limit: Int
+    var exportFormat: String?
     var taskTitle: String?
     var taskGoal: String?
 
@@ -41,12 +45,14 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         table: String? = nil,
         record: [String: WorkspaceAppStorageValue] = [:],
         limit: Int = 100,
+        exportFormat: String? = nil,
         taskTitle: String? = nil,
         taskGoal: String? = nil
     ) {
         self.table = table
         self.record = record
         self.limit = limit
+        self.exportFormat = exportFormat
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
     }
@@ -178,11 +184,20 @@ struct WorkspaceAppActionExecutor {
                 modelContext: modelContext
             )
             run.linkedTaskID = result.linkedTaskID
+            run.linkedArtifactPath = result.linkedArtifactPath
             if let linkedTaskID = result.linkedTaskID {
                 recorder.recordEvent(
                     run: run,
                     type: "workspaceApp.task.created",
                     payload: ["taskID": .text(linkedTaskID.uuidString)],
+                    modelContext: modelContext
+                )
+            }
+            if let linkedArtifactPath = result.linkedArtifactPath {
+                recorder.recordEvent(
+                    run: run,
+                    type: "workspaceApp.artifact.exported",
+                    payload: ["path": .text(linkedArtifactPath)],
                     modelContext: modelContext
                 )
             }
@@ -244,7 +259,12 @@ struct WorkspaceAppActionExecutor {
         manifest: WorkspaceAppManifest,
         input: WorkspaceAppActionInput,
         modelContext: ModelContext
-    ) throws -> (rows: [[String: WorkspaceAppStorageValue]], outputSummary: String, linkedTaskID: UUID?) {
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
         let databaseURL = URL(fileURLWithPath: WorkspaceFileLayout.appDatabaseFile(
             workspacePath: workspace.primaryPath,
             appID: app.logicalID
@@ -258,15 +278,30 @@ struct WorkspaceAppActionExecutor {
             } catch {
                 throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
             }
-            return ([], "Inserted 1 record into \(table).", nil)
+            return ([], "Inserted 1 record into \(table).", nil, nil)
         case "appStorage.query":
-            guard let table = input.table else { throw WorkspaceAppActionExecutionError.missingTable }
+            guard let table = input.table ?? action.table else { throw WorkspaceAppActionExecutionError.missingTable }
             do {
                 let rows = try storageService.records(in: table, databaseURL: databaseURL, limit: input.limit)
-                return (rows, "Read \(rows.count) records from \(table).", nil)
+                return (rows, "Read \(rows.count) records from \(table).", nil, nil)
             } catch {
                 throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
             }
+        case "artifact.export":
+            let artifactURL = try exportStorageArtifact(
+                action: action,
+                manifest: manifest,
+                input: input,
+                workspace: workspace,
+                app: app,
+                databaseURL: databaseURL
+            )
+            return (
+                [],
+                "Exported \(artifactURL.lastPathComponent).",
+                nil,
+                artifactURL.path
+            )
         case "task.createDraft":
             let task = try createDraftTask(
                 action: action,
@@ -275,9 +310,129 @@ struct WorkspaceAppActionExecutor {
                 workspace: workspace,
                 modelContext: modelContext
             )
-            return ([], "Created draft task '\(task.title)'.", task.id)
+            return ([], "Created draft task '\(task.title)'.", task.id, nil)
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
+        }
+    }
+
+    private func exportStorageArtifact(
+        action: WorkspaceAppActionSpec,
+        manifest: WorkspaceAppManifest,
+        input: WorkspaceAppActionInput,
+        workspace: Workspace,
+        app: WorkspaceApp,
+        databaseURL: URL
+    ) throws -> URL {
+        guard let table = input.table ?? action.table else {
+            throw WorkspaceAppActionExecutionError.missingTable
+        }
+        let format = normalized(input.exportFormat, action.exportFormat, fallback: "csv").lowercased()
+        let rows: [[String: WorkspaceAppStorageValue]]
+        do {
+            rows = try storageService.records(in: table, databaseURL: databaseURL, limit: input.limit)
+        } catch {
+            throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
+        }
+
+        let directory = WorkspaceFileLayout.appArtifactExportDirectory(
+            workspacePath: workspace.primaryPath,
+            appID: app.logicalID
+        )
+        guard !directory.isEmpty else {
+            throw WorkspaceAppActionExecutionError.storageFailed("Workspace path is unavailable.")
+        }
+        let directoryURL = URL(fileURLWithPath: directory, isDirectory: true)
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        switch format {
+        case "csv":
+            let url = try nextExportURL(directory: directoryURL, table: table, pathExtension: "csv")
+            let columns = exportColumns(rows, manifest: manifest, table: table)
+            try csvData(rows: rows, columns: columns).write(to: url, options: .atomic)
+            return url
+        case "json":
+            let url = try nextExportURL(directory: directoryURL, table: table, pathExtension: "json")
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(rows)
+            try data.write(to: url, options: .atomic)
+            return url
+        default:
+            throw WorkspaceAppActionExecutionError.unsupportedExportFormat(format)
+        }
+    }
+
+    private func nextExportURL(
+        directory: URL,
+        table: String,
+        pathExtension: String
+    ) throws -> URL {
+        let safeTable = table.replacingOccurrences(of: ".", with: "-")
+        let first = directory.appendingPathComponent("\(safeTable).\(pathExtension)")
+        guard FileManager.default.fileExists(atPath: first.path) else {
+            return first
+        }
+        var suffix = 2
+        while true {
+            let candidate = directory.appendingPathComponent("\(safeTable)-\(suffix).\(pathExtension)")
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            suffix += 1
+        }
+    }
+
+    private func exportColumns(
+        _ rows: [[String: WorkspaceAppStorageValue]],
+        manifest: WorkspaceAppManifest,
+        table: String
+    ) -> [String] {
+        if let declaredColumns = manifest.storage?.tables.first(where: { $0.name == table })?.columns.map(\.name),
+           !declaredColumns.isEmpty {
+            return declaredColumns
+        }
+        var columns: [String] = []
+        var seen = Set<String>()
+        for row in rows {
+            for key in row.keys.sorted() where seen.insert(key).inserted {
+                columns.append(key)
+            }
+        }
+        return columns
+    }
+
+    private func csvData(
+        rows: [[String: WorkspaceAppStorageValue]],
+        columns: [String]
+    ) -> Data {
+        let lines = [columns.map(csvField).joined(separator: ",")] + rows.map { row in
+            columns
+                .map { csvField(exportValue(row[$0])) }
+                .joined(separator: ",")
+        }
+        return Data((lines.joined(separator: "\n") + "\n").utf8)
+    }
+
+    private func csvField(_ value: String) -> String {
+        if value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r") {
+            return "\"\(value.replacingOccurrences(of: "\"", with: "\"\""))\""
+        }
+        return value
+    }
+
+    private func exportValue(_ value: WorkspaceAppStorageValue?) -> String {
+        switch value {
+        case .null, nil:
+            ""
+        case .text(let value):
+            value
+        case .integer(let value):
+            "\(value)"
+        case .real(let value):
+            value.formatted(.number.precision(.fractionLength(0...12)))
+        case .bool(let value):
+            value ? "true" : "false"
         }
     }
 
@@ -330,7 +485,8 @@ struct WorkspaceAppActionExecutor {
     private func inputSummary(_ input: WorkspaceAppActionInput) -> String {
         let table = input.table ?? "none"
         let taskGoal = input.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "present" : "none"
-        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); taskGoal=\(taskGoal)"
+        let exportFormat = input.exportFormat ?? "none"
+        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal)"
     }
 
     private func isPermissionError(_ error: Error) -> Bool {

@@ -168,7 +168,13 @@ enum WorkspaceAppStudioBuilder {
                     taskTitle: "Plan next grocery trip",
                     taskGoal: "Review the grocery tracker records and draft a focused shopping plan for the next trip."
                 ),
-                WorkspaceAppActionSpec(id: "export_items", type: "artifact.export", label: "Export Items")
+                WorkspaceAppActionSpec(
+                    id: "export_items",
+                    type: "artifact.export",
+                    label: "Export Items",
+                    table: "items",
+                    exportFormat: "csv"
+                )
             ],
             permissions: WorkspaceAppPermissions(
                 reads: ["appStorage.records"],

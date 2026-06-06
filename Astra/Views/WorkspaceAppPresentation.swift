@@ -397,6 +397,29 @@ enum WorkspaceAppDetailActionsPresentation {
                 )
             )
 
+        case "artifact.export":
+            guard let table = action.table ?? storageTables.first?.name else {
+                return WorkspaceAppDetailActionPresentation(
+                    id: action.id,
+                    label: label?.isEmpty == false ? label! : action.id,
+                    type: action.type,
+                    isEnabled: false,
+                    disabledReason: "No app storage table is available.",
+                    input: WorkspaceAppActionInput()
+                )
+            }
+            return WorkspaceAppDetailActionPresentation(
+                id: action.id,
+                label: label?.isEmpty == false ? label! : action.id,
+                type: action.type,
+                isEnabled: true,
+                disabledReason: nil,
+                input: WorkspaceAppActionInput(
+                    table: table,
+                    exportFormat: action.exportFormat ?? "csv"
+                )
+            )
+
         default:
             return WorkspaceAppDetailActionPresentation(
                 id: action.id,

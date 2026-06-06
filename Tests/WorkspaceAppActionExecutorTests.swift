@@ -53,6 +53,86 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("artifact export actions write linked CSV files from app storage")
+    func artifactExportActionsWriteLinkedCSVFilesFromAppStorage() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples, Gala"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        let result = try WorkspaceAppActionExecutor().execute(
+            actionID: "exportItems",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+
+        let path = try #require(result.run.linkedArtifactPath)
+        let csv = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(path.hasSuffix("/.astra/apps/grocery-actions/exports/items.csv"))
+        #expect(csv == "id,name,category\nitem-1,\"Apples, Gala\",Produce\n")
+        #expect(result.outputSummary == "Exported items.csv.")
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+        #expect(events.contains { event in
+            event.type == "workspaceApp.artifact.exported" &&
+                event.payload.contains("items.csv")
+        })
+    }
+
+    @MainActor
+    @Test("artifact export actions write linked JSON files from app storage")
+    func artifactExportActionsWriteLinkedJSONFilesFromAppStorage() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        let result = try WorkspaceAppActionExecutor().execute(
+            actionID: "exportItems",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(exportFormat: "json"),
+            modelContext: fixture.context
+        )
+
+        let path = try #require(result.run.linkedArtifactPath)
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        let rows = try JSONDecoder().decode([[String: WorkspaceAppStorageValue]].self, from: data)
+        #expect(path.hasSuffix("/.astra/apps/grocery-actions/exports/items.json"))
+        #expect(rows.count == 1)
+        #expect(rows[0]["name"] == .text("Apples"))
+    }
+
+    @MainActor
     @Test("task create draft actions create linked AgentTask drafts")
     func taskCreateDraftActionsCreateLinkedAgentTaskDrafts() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
@@ -249,6 +329,13 @@ struct WorkspaceAppActionExecutorTests {
                     label: "Create Review Task",
                     taskTitle: "Review grocery records",
                     taskGoal: "Review the grocery records and propose the next shopping task."
+                ),
+                WorkspaceAppActionSpec(
+                    id: "exportItems",
+                    type: "artifact.export",
+                    label: "Export Items",
+                    table: "items",
+                    exportFormat: "csv"
                 )
             ],
             permissions: WorkspaceAppPermissions(

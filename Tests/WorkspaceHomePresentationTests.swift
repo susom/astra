@@ -205,6 +205,13 @@ struct WorkspaceHomePresentationTests {
                     taskTitle: "Review items",
                     taskGoal: "Review the current grocery records."
                 ),
+                WorkspaceAppActionSpec(
+                    id: "export",
+                    type: "artifact.export",
+                    label: "Export Items",
+                    table: "items",
+                    exportFormat: "csv"
+                ),
                 WorkspaceAppActionSpec(id: "submit", type: "capability.write", label: "Submit")
             ]
         )
@@ -222,7 +229,7 @@ struct WorkspaceHomePresentationTests {
             storageTables: storageTables
         )
 
-        #expect(actions.count == 4)
+        #expect(actions.count == 5)
         #expect(actions[0].id == "listItems")
         #expect(actions[0].isEnabled)
         #expect(actions[0].input.table == "items")
@@ -233,9 +240,13 @@ struct WorkspaceHomePresentationTests {
         #expect(actions[2].isEnabled)
         #expect(actions[2].input.taskTitle == "Review items")
         #expect(actions[2].input.taskGoal == "Review the current grocery records.")
-        #expect(actions[3].id == "submit")
-        #expect(!actions[3].isEnabled)
-        #expect(actions[3].disabledReason == "This action type is not wired into the app renderer yet.")
+        #expect(actions[3].id == "export")
+        #expect(actions[3].isEnabled)
+        #expect(actions[3].input.table == "items")
+        #expect(actions[3].input.exportFormat == "csv")
+        #expect(actions[4].id == "submit")
+        #expect(!actions[4].isEnabled)
+        #expect(actions[4].disabledReason == "This action type is not wired into the app renderer yet.")
 
         let table = try #require(manifest.storage?.tables.first)
         let fields = WorkspaceAppStorageRecordDraftBuilder.fields(for: table)
@@ -373,6 +384,7 @@ struct WorkspaceHomePresentationTests {
         })
         #expect(draft.manifest.actions.contains { $0.type == "appStorage.insert" })
         #expect(draft.manifest.actions.contains { $0.type == "task.createDraft" && $0.taskGoal?.isEmpty == false })
+        #expect(draft.manifest.actions.contains { $0.type == "artifact.export" && $0.table == "items" && $0.exportFormat == "csv" })
         #expect(draft.manifest.permissions.defaultMode == .draftOnly)
     }
 

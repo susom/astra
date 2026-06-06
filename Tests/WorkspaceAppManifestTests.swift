@@ -106,6 +106,30 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects artifact exports with unknown table or format")
+    func validationRejectsInvalidArtifactExportBindings() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "export_missing",
+                type: "artifact.export",
+                label: "Export",
+                table: "missing_table",
+                exportFormat: "xlsx"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/table" && $0.message.contains("missing_table")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/exportFormat" && $0.message.contains("csv or json")
+        })
+    }
+
     @Test("manifest encoding preserves native widget specs")
     func manifestEncodingPreservesNativeWidgetSpecs() throws {
         let manifest = Self.reconciliationManifest()

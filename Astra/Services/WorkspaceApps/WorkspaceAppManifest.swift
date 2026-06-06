@@ -229,6 +229,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var label: String?
     var requirementRef: String?
     var operation: String?
+    var table: String?
+    var exportFormat: String?
     var taskTitle: String?
     var taskGoal: String?
 
@@ -238,6 +240,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         label: String? = nil,
         requirementRef: String? = nil,
         operation: String? = nil,
+        table: String? = nil,
+        exportFormat: String? = nil,
         taskTitle: String? = nil,
         taskGoal: String? = nil
     ) {
@@ -246,6 +250,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.label = label
         self.requirementRef = requirementRef
         self.operation = operation
+        self.table = table
+        self.exportFormat = exportFormat
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
     }

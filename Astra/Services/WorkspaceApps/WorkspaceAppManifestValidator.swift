@@ -43,7 +43,12 @@ enum WorkspaceAppManifestValidator {
         let storageTables = validateStorage(manifest.storage, issues: &issues)
         validateSources(manifest.sources, requirementIDs: requirementIDs, issues: &issues)
         validateViews(manifest.views, storageTables: storageTables, issues: &issues)
-        validateActions(manifest.actions, requirementIDs: requirementIDs, issues: &issues)
+        validateActions(
+            manifest.actions,
+            requirementIDs: requirementIDs,
+            storageTables: storageTables,
+            issues: &issues
+        )
         validateAutomations(manifest.automations, actionIDs: Set(manifest.actions.map(\.id)), issues: &issues)
         validatePermissions(manifest.permissions, issues: &issues)
 
@@ -236,6 +241,7 @@ enum WorkspaceAppManifestValidator {
     private static func validateActions(
         _ actions: [WorkspaceAppActionSpec],
         requirementIDs: Set<String>,
+        storageTables: [String: Set<String>],
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
     ) {
         var seen = Set<String>()
@@ -252,6 +258,15 @@ enum WorkspaceAppManifestValidator {
             if let requirementRef = action.requirementRef,
                !requirementIDs.contains(requirementRef) {
                 issues.append(blocker("\(path)/requirementRef", "Action references unknown requirement '\(requirementRef)'."))
+            }
+            if let table = action.table {
+                validateStorageTableReference(table, path: "\(path)/table", storageTables: storageTables, issues: &issues)
+            }
+            if action.type == "artifact.export",
+               let format = action.exportFormat?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !format.isEmpty,
+               !["csv", "json"].contains(format) {
+                issues.append(blocker("\(path)/exportFormat", "Artifact export format must be csv or json."))
             }
             if action.type == "task.createDraft",
                action.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
