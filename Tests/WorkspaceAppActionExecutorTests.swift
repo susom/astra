@@ -300,6 +300,70 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("pipeline human approval gates block until confirmed")
+    func pipelineHumanApprovalGatesBlockUntilConfirmed() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        #expect(throws: WorkspaceAppActionExecutionError.approvalRequired("approvalGate")) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "approvalPipeline",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                modelContext: fixture.context
+            )
+        }
+
+        let blockedRun = try #require(try fixture.context.fetch(FetchDescriptor<WorkspaceAppRun>())
+            .first { $0.actionID == "approvalPipeline" })
+        #expect(blockedRun.status == .blocked)
+        #expect(blockedRun.linkedArtifactPath == nil)
+
+        var blockedEvents = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == blockedRun.id }
+        #expect(blockedEvents.contains {
+            $0.type == "workspaceApp.approval.requested" && $0.payload.contains("Approve exporting grocery data?")
+        })
+        #expect(!blockedEvents.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("exportItems") })
+
+        let approvedResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "approvalPipeline",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(confirmedApproval: true),
+            modelContext: fixture.context
+        )
+
+        #expect(approvedResult.run.status == .completed)
+        #expect(approvedResult.outputSummary.contains("approvalGate: Approval gate 'approvalGate' confirmed."))
+        #expect(approvedResult.outputSummary.contains("exportItems: Exported items.csv."))
+        #expect(approvedResult.run.linkedArtifactPath?.contains("items.csv") == true)
+
+        blockedEvents = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == approvedResult.run.id }
+        #expect(blockedEvents.contains { $0.type == "workspaceApp.approval.confirmed" })
+        #expect(blockedEvents.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("approvalGate") })
+        #expect(blockedEvents.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("exportItems") })
+    }
+
+    @MainActor
     @Test("read-only apps block local write actions and record blocked runs")
     func readOnlyAppsBlockLocalWriteActionsAndRecordBlockedRuns() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
@@ -489,6 +553,19 @@ struct WorkspaceAppActionExecutorTests {
                     type: "pipeline.run",
                     label: "Export Pipeline",
                     steps: ["listItems", "exportItems"]
+                ),
+                WorkspaceAppActionSpec(
+                    id: "approvalGate",
+                    type: "gate.humanApproval",
+                    label: "Approve Export",
+                    approvalPrompt: "Approve exporting grocery data?",
+                    approvalDecisions: ["approve", "reject"]
+                ),
+                WorkspaceAppActionSpec(
+                    id: "approvalPipeline",
+                    type: "pipeline.run",
+                    label: "Approval Pipeline",
+                    steps: ["approvalGate", "exportItems"]
                 )
             ],
             permissions: WorkspaceAppPermissions(

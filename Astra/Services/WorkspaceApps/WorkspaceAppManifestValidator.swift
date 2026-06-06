@@ -314,6 +314,22 @@ enum WorkspaceAppManifestValidator {
                action.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 issues.append(blocker("\(path)/taskGoal", "Task draft action must declare a task goal."))
             }
+            if action.type == "gate.humanApproval" {
+                if action.approvalPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    issues.append(blocker("\(path)/approvalPrompt", "Human approval gate must declare an approval prompt."))
+                }
+                if action.approvalDecisions.isEmpty {
+                    issues.append(blocker("\(path)/approvalDecisions", "Human approval gate must declare available decisions."))
+                }
+                for (decisionIndex, decision) in action.approvalDecisions.enumerated() {
+                    validateIdentifier(
+                        decision,
+                        path: "\(path)/approvalDecisions/\(decisionIndex)",
+                        label: "Approval decision",
+                        issues: &issues
+                    )
+                }
+            }
         }
 
         for (index, action) in actions.enumerated() where action.type == "pipeline.run" {

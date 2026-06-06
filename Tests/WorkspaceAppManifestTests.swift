@@ -191,6 +191,28 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects human approval gates without prompts or decisions")
+    func validationRejectsInvalidHumanApprovalGates() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "approval_gate",
+                type: "gate.humanApproval",
+                label: "Approval"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/approvalPrompt" && $0.message.contains("approval prompt")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/approvalDecisions" && $0.message.contains("available decisions")
+        })
+    }
+
     @Test("manifest validation rejects invalid pipeline step references")
     func validationRejectsInvalidPipelineStepReferences() {
         var manifest = Self.reconciliationManifest()

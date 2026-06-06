@@ -10,6 +10,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingTaskGoal
     case missingPipelineSteps(String)
     case unsupportedExportFormat(String)
+    case approvalRequired(String)
     case permissionDenied(String)
     case storageFailed(String)
 
@@ -31,6 +32,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app pipeline action '\(actionID)' must declare at least one step."
         case .unsupportedExportFormat(let format):
             "Workspace app artifact export format '\(format)' is not supported."
+        case .approvalRequired(let actionID):
+            "Workspace app approval gate '\(actionID)' requires human approval before execution can continue."
         case .permissionDenied(let message):
             message
         case .storageFailed(let message):
@@ -47,6 +50,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
     var taskTitle: String?
     var taskGoal: String?
     var confirmedDestructive: Bool
+    var confirmedApproval: Bool
 
     init(
         table: String? = nil,
@@ -55,7 +59,8 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         exportFormat: String? = nil,
         taskTitle: String? = nil,
         taskGoal: String? = nil,
-        confirmedDestructive: Bool = false
+        confirmedDestructive: Bool = false,
+        confirmedApproval: Bool = false
     ) {
         self.table = table
         self.record = record
@@ -64,6 +69,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
         self.confirmedDestructive = confirmedDestructive
+        self.confirmedApproval = confirmedApproval
     }
 }
 
@@ -368,6 +374,13 @@ struct WorkspaceAppActionExecutor {
                 modelContext: modelContext
             )
             return ([], "Created draft task '\(task.title)'.", task.id, nil)
+        case "gate.humanApproval":
+            return try executeHumanApprovalGate(
+                action: action,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
         case "pipeline.run":
             return try executePipeline(
                 action: action,
@@ -381,6 +394,43 @@ struct WorkspaceAppActionExecutor {
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
         }
+    }
+
+    private func executeHumanApprovalGate(
+        action: WorkspaceAppActionSpec,
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let prompt = action.approvalPrompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? action.approvalPrompt ?? "Approval required."
+            : "Approval required."
+        if !input.confirmedApproval {
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.approval.requested",
+                payload: [
+                    "actionID": .text(action.id),
+                    "prompt": .text(prompt),
+                    "decisions": .text(action.approvalDecisions.joined(separator: ","))
+                ],
+                modelContext: modelContext
+            )
+            throw WorkspaceAppActionExecutionError.approvalRequired(action.id)
+        }
+
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.approval.confirmed",
+            payload: ["actionID": .text(action.id), "prompt": .text(prompt)],
+            modelContext: modelContext
+        )
+        return ([], "Approval gate '\(action.id)' confirmed.", nil, nil)
     }
 
     private func executePipeline(
@@ -606,7 +656,7 @@ struct WorkspaceAppActionExecutor {
 
     private func effect(for actionType: String) -> WorkspaceAppContractEffect {
         switch actionType {
-        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run":
+        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run", "gate.humanApproval":
             .read
         case "appStorage.insert", "appStorage.update", "notification.show", "task.createDraft":
             .localWrite
@@ -623,11 +673,14 @@ struct WorkspaceAppActionExecutor {
         let table = input.table ?? "none"
         let taskGoal = input.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "present" : "none"
         let exportFormat = input.exportFormat ?? "none"
-        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal); confirmedDestructive=\(input.confirmedDestructive)"
+        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal); confirmedDestructive=\(input.confirmedDestructive); confirmedApproval=\(input.confirmedApproval)"
     }
 
     private func isPermissionError(_ error: Error) -> Bool {
         if case WorkspaceAppActionExecutionError.permissionDenied = error {
+            return true
+        }
+        if case WorkspaceAppActionExecutionError.approvalRequired = error {
             return true
         }
         return false

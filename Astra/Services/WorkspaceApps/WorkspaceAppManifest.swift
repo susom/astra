@@ -269,6 +269,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var exportFormat: String?
     var taskTitle: String?
     var taskGoal: String?
+    var approvalPrompt: String?
+    var approvalDecisions: [String]
     var steps: [String]
 
     enum CodingKeys: String, CodingKey {
@@ -281,6 +283,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         case exportFormat
         case taskTitle
         case taskGoal
+        case approvalPrompt
+        case approvalDecisions
         case steps
     }
 
@@ -294,6 +298,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         exportFormat: String? = nil,
         taskTitle: String? = nil,
         taskGoal: String? = nil,
+        approvalPrompt: String? = nil,
+        approvalDecisions: [String] = [],
         steps: [String] = []
     ) {
         self.id = id
@@ -305,6 +311,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.exportFormat = exportFormat
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
+        self.approvalPrompt = approvalPrompt
+        self.approvalDecisions = approvalDecisions
         self.steps = steps
     }
 
@@ -319,6 +327,8 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         exportFormat = try container.decodeIfPresent(String.self, forKey: .exportFormat)
         taskTitle = try container.decodeIfPresent(String.self, forKey: .taskTitle)
         taskGoal = try container.decodeIfPresent(String.self, forKey: .taskGoal)
+        approvalPrompt = try container.decodeIfPresent(String.self, forKey: .approvalPrompt)
+        approvalDecisions = try container.decodeIfPresent([String].self, forKey: .approvalDecisions) ?? []
         steps = try container.decodeIfPresent([String].self, forKey: .steps) ?? []
     }
 }
