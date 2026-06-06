@@ -57,6 +57,15 @@ protocol WorkspaceAppCapabilitySourceClient {
     ) throws -> [[String: WorkspaceAppStorageValue]]
 }
 
+protocol WorkspaceAppAsyncCapabilitySourceClient {
+    func read(
+        source: WorkspaceAppSource,
+        requirement: WorkspaceAppRequirement,
+        binding: WorkspaceAppDependencyBinding,
+        input: WorkspaceAppSourceResolutionInput
+    ) async throws -> [[String: WorkspaceAppStorageValue]]
+}
+
 struct WorkspaceAppUnavailableCapabilitySourceClient: WorkspaceAppCapabilitySourceClient {
     func read(
         source: WorkspaceAppSource,
@@ -68,9 +77,21 @@ struct WorkspaceAppUnavailableCapabilitySourceClient: WorkspaceAppCapabilitySour
     }
 }
 
+struct WorkspaceAppUnavailableAsyncCapabilitySourceClient: WorkspaceAppAsyncCapabilitySourceClient {
+    func read(
+        source: WorkspaceAppSource,
+        requirement: WorkspaceAppRequirement,
+        binding: WorkspaceAppDependencyBinding,
+        input: WorkspaceAppSourceResolutionInput
+    ) async throws -> [[String: WorkspaceAppStorageValue]] {
+        throw WorkspaceAppSourceResolutionError.capabilityReadUnavailable(source.id)
+    }
+}
+
 struct WorkspaceAppSourceResolver {
     var storageService = WorkspaceAppStorageService()
     var capabilityClient: any WorkspaceAppCapabilitySourceClient = WorkspaceAppUnavailableCapabilitySourceClient()
+    var asyncCapabilityClient: any WorkspaceAppAsyncCapabilitySourceClient = WorkspaceAppNativeAsyncCapabilitySourceClient()
 
     func resolve(
         sourceID: String,
@@ -96,6 +117,39 @@ struct WorkspaceAppSourceResolver {
             throw WorkspaceAppSourceResolutionError.unsupportedSource(source.id)
         }
         return try resolveCapabilitySource(
+            source,
+            requirementID: requirementID,
+            app: app,
+            manifest: manifest,
+            dependencyBindings: dependencyBindings,
+            input: input
+        )
+    }
+
+    func resolveAsync(
+        sourceID: String,
+        app: WorkspaceApp,
+        workspace: Workspace,
+        manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding] = [],
+        input: WorkspaceAppSourceResolutionInput = WorkspaceAppSourceResolutionInput()
+    ) async throws -> WorkspaceAppResolvedSource {
+        guard let source = manifest.sources.first(where: { $0.id == sourceID }) else {
+            throw WorkspaceAppSourceResolutionError.missingSource(sourceID)
+        }
+        if let table = storageTable(for: source, manifest: manifest) {
+            return try resolveStorageSource(
+                source,
+                table: table,
+                app: app,
+                workspace: workspace,
+                input: input
+            )
+        }
+        guard let requirementID = source.requirementRef else {
+            throw WorkspaceAppSourceResolutionError.unsupportedSource(source.id)
+        }
+        return try await resolveCapabilitySourceAsync(
             source,
             requirementID: requirementID,
             app: app,
@@ -158,6 +212,38 @@ struct WorkspaceAppSourceResolver {
             throw WorkspaceAppSourceResolutionError.missingMappedBinding(requirementID)
         }
         let rows = try capabilityClient.read(
+            source: source,
+            requirement: requirement,
+            binding: binding,
+            input: input
+        )
+        return WorkspaceAppResolvedSource(
+            sourceID: source.id,
+            rows: rows,
+            outputSummary: "Resolved source '\(source.id)' through \(binding.contract) using \(binding.implementationID ?? "unmapped") with \(rows.count) rows.",
+            requirementID: requirementID,
+            implementationID: binding.implementationID,
+            provider: binding.provider
+        )
+    }
+
+    private func resolveCapabilitySourceAsync(
+        _ source: WorkspaceAppSource,
+        requirementID: String,
+        app: WorkspaceApp,
+        manifest: WorkspaceAppManifest,
+        dependencyBindings: [WorkspaceAppDependencyBinding],
+        input: WorkspaceAppSourceResolutionInput
+    ) async throws -> WorkspaceAppResolvedSource {
+        guard let requirement = manifest.requirements.first(where: { $0.id == requirementID }) else {
+            throw WorkspaceAppSourceResolutionError.missingRequirement(requirementID)
+        }
+        guard let binding = dependencyBindings.first(where: {
+            $0.appID == app.id && $0.requirementID == requirementID && $0.status == .mapped
+        }) else {
+            throw WorkspaceAppSourceResolutionError.missingMappedBinding(requirementID)
+        }
+        let rows = try await asyncCapabilityClient.read(
             source: source,
             requirement: requirement,
             binding: binding,

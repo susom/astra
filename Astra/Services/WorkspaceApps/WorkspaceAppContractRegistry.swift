@@ -314,6 +314,15 @@ struct WorkspaceAppContractRegistry: Equatable {
             externalEffects: ["localFileWrite"]
         ),
         WorkspaceAppContractImplementation(
+            id: "bigquery-read-native",
+            familyID: "tabularQuery.read",
+            provider: "bigQuery",
+            transport: .native,
+            operations: ["previewRows", "runReadOnlyQuery"],
+            dataAccess: ["externalService"],
+            externalEffects: ["readOnly"]
+        ),
+        WorkspaceAppContractImplementation(
             id: "bigquery-read-task-backed",
             familyID: "tabularQuery.read",
             provider: "bigQuery",

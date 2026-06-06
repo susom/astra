@@ -23,6 +23,8 @@ struct WorkspaceAppContractRegistryTests {
         #expect(registry.family(id: "recordProject.write")?.operations.contains {
             $0.name == "submitUpdate" && $0.effect == .externalWrite && $0.requiresApproval
         } == true)
+        #expect(registry.implementation(id: "bigquery-read-native")?.transport == .native)
+        #expect(registry.implementation(id: "bigquery-read-native")?.operations == ["previewRows", "runReadOnlyQuery"])
     }
 
     @Test("provider hint orders compatible implementations without filtering alternates")

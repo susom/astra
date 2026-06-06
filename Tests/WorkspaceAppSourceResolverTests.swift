@@ -110,6 +110,95 @@ struct WorkspaceAppSourceResolverTests {
         #expect(redcap.provider == "redcap")
     }
 
+    @Test("async resolver reads BigQuery table sources through native query client")
+    func asyncResolverReadsBigQueryTableSourcesThroughNativeQueryClient() async throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = Workspace(name: "Reconciliation", primaryPath: root.path)
+        var manifest = Self.reconciliationManifest()
+        manifest.sources[0].projectRef = "clinical-prod"
+        let app = Self.app(for: manifest, workspace: workspace)
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: app.logicalID,
+            requirementID: "sourceWarehouse",
+            contract: "tabularQuery.read",
+            operations: ["runReadOnlyQuery"],
+            optional: false,
+            status: .mapped,
+            implementationID: "bigquery-read-native",
+            provider: "bigQuery",
+            transport: .native
+        )
+        let runner = MockWorkspaceAppDatabaseQueryRunner(result: QueryExecutionResult(
+            columns: [
+                QueryResultColumn(name: "participant_id", type: "STRING"),
+                QueryResultColumn(name: "mrn", type: "STRING")
+            ],
+            rows: [["P-001", "1001"]],
+            rowCount: 1,
+            bytesProcessed: 512,
+            elapsedMilliseconds: 25,
+            jobID: "job-1",
+            message: "Query completed."
+        ))
+        let resolver = WorkspaceAppSourceResolver(
+            asyncCapabilityClient: WorkspaceAppNativeAsyncCapabilitySourceClient(queryRunner: runner)
+        )
+
+        let result = try await resolver.resolveAsync(
+            sourceID: "warehouse_latest",
+            app: app,
+            workspace: workspace,
+            manifest: manifest,
+            dependencyBindings: [binding],
+            input: WorkspaceAppSourceResolutionInput(limit: 25)
+        )
+
+        #expect(result.rows == [["participant_id": .text("P-001"), "mrn": .text("1001")]])
+        #expect(result.implementationID == "bigquery-read-native")
+        #expect(result.provider == "bigQuery")
+        #expect(await runner.requests.first?.sql == "SELECT * FROM `clinical-prod.clinical.enrollment_candidates` LIMIT 25")
+        #expect(await runner.requests.first?.rowLimit == 25)
+        #expect(await runner.requests.first?.connection.adapterID == "bigquery-cli")
+        #expect(await runner.requests.first?.connection.projectID == "clinical-prod")
+        #expect(await runner.requests.first?.connection.defaultNamespace == "clinical")
+    }
+
+    @Test("BigQuery native client rejects non-read SQL")
+    func bigQueryNativeClientRejectsNonReadSQL() async throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = Workspace(name: "Reconciliation", primaryPath: root.path)
+        var manifest = Self.reconciliationManifest()
+        manifest.sources[0].query = "DELETE FROM `clinical.enrollment_candidates` WHERE true"
+        let app = Self.app(for: manifest, workspace: workspace)
+        let binding = WorkspaceAppDependencyBinding(
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: app.logicalID,
+            requirementID: "sourceWarehouse",
+            contract: "tabularQuery.read",
+            operations: ["runReadOnlyQuery"],
+            optional: false,
+            status: .mapped,
+            implementationID: "bigquery-read-native",
+            provider: "bigQuery",
+            transport: .native
+        )
+
+        await #expect(throws: WorkspaceAppSourceResolutionError.unsupportedSource("warehouse_latest")) {
+            try await WorkspaceAppSourceResolver().resolveAsync(
+                sourceID: "warehouse_latest",
+                app: app,
+                workspace: workspace,
+                manifest: manifest,
+                dependencyBindings: [binding]
+            )
+        }
+    }
+
     @Test("resolver blocks capability sources without mapped dependencies")
     func resolverBlocksCapabilitySourcesWithoutMappedDependencies() throws {
         let root = try Self.temporaryRoot()
@@ -197,6 +286,20 @@ struct WorkspaceAppSourceResolverTests {
                 )
             ]
         )
+    }
+}
+
+private actor MockWorkspaceAppDatabaseQueryRunner: WorkspaceAppDatabaseQueryRunning {
+    private(set) var requests: [QueryRequest] = []
+    var result: QueryExecutionResult
+
+    init(result: QueryExecutionResult) {
+        self.result = result
+    }
+
+    func run(_ request: QueryRequest) async throws -> QueryExecutionResult {
+        requests.append(request)
+        return result
     }
 }
 
