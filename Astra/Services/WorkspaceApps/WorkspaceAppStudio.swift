@@ -138,6 +138,23 @@ struct WorkspaceAppStudioPatchResult: Sendable, Equatable {
     }
 }
 
+enum WorkspaceAppStudioStructuredOutputKind: String, Sendable, Equatable {
+    case manifest
+    case patch
+}
+
+struct WorkspaceAppStudioStructuredOutputResult: Sendable, Equatable {
+    var kind: WorkspaceAppStudioStructuredOutputKind?
+    var manifest: WorkspaceAppManifest
+    var rejectedManifest: WorkspaceAppManifest?
+    var validationReport: WorkspaceAppManifestValidationReport
+    var accepted: Bool
+
+    var canPublish: Bool {
+        accepted && validationReport.isValid
+    }
+}
+
 enum WorkspaceAppStudioBuilder {
     static let defaultIntent = "Build me a database app to store my groceries."
 
@@ -260,6 +277,51 @@ enum WorkspaceAppStudioBuilder {
         }
     }
 
+    static func applyStructuredOutput(
+        _ output: String,
+        to manifest: WorkspaceAppManifest
+    ) -> WorkspaceAppStudioStructuredOutputResult {
+        let manifestBlock = structuredBlock(
+            named: "ASTRA_APP_MANIFEST",
+            in: output
+        )
+        let patchBlock = structuredBlock(
+            named: "ASTRA_APP_PATCH",
+            in: output
+        )
+
+        switch (manifestBlock, patchBlock) {
+        case (.success(let manifestPayload), .notFound):
+            return applyManifestPayload(manifestPayload, preserving: manifest)
+        case (.notFound, .success(let patchPayload)):
+            return applyPatchPayload(patchPayload, to: manifest)
+        case (.notFound, .notFound):
+            return structuredOutputFailure(
+                preserving: manifest,
+                path: "/structuredOutput",
+                message: "No ASTRA app manifest or patch block was found."
+            )
+        case (.success, .success):
+            return structuredOutputFailure(
+                preserving: manifest,
+                path: "/structuredOutput",
+                message: "Structured output must include either ASTRA_APP_MANIFEST or ASTRA_APP_PATCH, not both."
+            )
+        case (.failure(let message), _):
+            return structuredOutputFailure(
+                preserving: manifest,
+                path: "/structuredOutput/ASTRA_APP_MANIFEST",
+                message: message
+            )
+        case (_, .failure(let message)):
+            return structuredOutputFailure(
+                preserving: manifest,
+                path: "/structuredOutput/ASTRA_APP_PATCH",
+                message: message
+            )
+        }
+    }
+
     private static func manifest(for intent: String) -> WorkspaceAppManifest {
         if isLocalDatabaseIntent(intent) {
             return localDatabaseManifest(intent: intent)
@@ -278,6 +340,114 @@ enum WorkspaceAppStudioBuilder {
             return reportGeneratorManifest(for: idea)
         }
         return operationalSurfaceManifest(intent: idea.name)
+    }
+
+    private static func applyManifestPayload(
+        _ payload: String,
+        preserving manifest: WorkspaceAppManifest
+    ) -> WorkspaceAppStudioStructuredOutputResult {
+        do {
+            let decoded = try JSONDecoder().decode(
+                WorkspaceAppManifest.self,
+                from: Data(payload.utf8)
+            )
+            let report = WorkspaceAppManifestValidator.validate(decoded)
+            guard report.isValid else {
+                return WorkspaceAppStudioStructuredOutputResult(
+                    kind: .manifest,
+                    manifest: manifest,
+                    rejectedManifest: decoded,
+                    validationReport: report,
+                    accepted: false
+                )
+            }
+            return WorkspaceAppStudioStructuredOutputResult(
+                kind: .manifest,
+                manifest: decoded,
+                rejectedManifest: nil,
+                validationReport: report,
+                accepted: true
+            )
+        } catch {
+            return structuredOutputFailure(
+                preserving: manifest,
+                path: "/structuredOutput/ASTRA_APP_MANIFEST",
+                message: "Could not decode app manifest block: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private static func applyPatchPayload(
+        _ payload: String,
+        to manifest: WorkspaceAppManifest
+    ) -> WorkspaceAppStudioStructuredOutputResult {
+        do {
+            let operations = try JSONDecoder().decode(
+                [WorkspaceAppStudioManifestPatchOperation].self,
+                from: Data(payload.utf8)
+            )
+            let patchResult = applyPatch(operations, to: manifest)
+            return WorkspaceAppStudioStructuredOutputResult(
+                kind: .patch,
+                manifest: patchResult.manifest,
+                rejectedManifest: patchResult.rejectedManifest,
+                validationReport: patchResult.validationReport,
+                accepted: patchResult.accepted
+            )
+        } catch {
+            return structuredOutputFailure(
+                preserving: manifest,
+                path: "/structuredOutput/ASTRA_APP_PATCH",
+                message: "Could not decode app patch block: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private static func structuredOutputFailure(
+        preserving manifest: WorkspaceAppManifest,
+        path: String,
+        message: String
+    ) -> WorkspaceAppStudioStructuredOutputResult {
+        WorkspaceAppStudioStructuredOutputResult(
+            kind: nil,
+            manifest: manifest,
+            rejectedManifest: nil,
+            validationReport: WorkspaceAppManifestValidationReport(issues: [
+                WorkspaceAppManifestValidationReport.Issue(
+                    severity: .blocker,
+                    path: path,
+                    message: message
+                )
+            ]),
+            accepted: false
+        )
+    }
+
+    private static func structuredBlock(
+        named name: String,
+        in output: String
+    ) -> WorkspaceAppStudioStructuredBlock {
+        let endMarker = "END_\(name)"
+        let lines = output.components(separatedBy: .newlines)
+        let startIndexes = lines.indices.filter { lines[$0].trimmingCharacters(in: .whitespacesAndNewlines) == name }
+        guard let startIndex = startIndexes.first else {
+            return .notFound
+        }
+        guard startIndexes.count == 1 else {
+            return .failure("Structured output includes multiple \(name) blocks.")
+        }
+        guard let endIndex = lines.indices[(startIndex + 1)...].first(where: {
+            lines[$0].trimmingCharacters(in: .whitespacesAndNewlines) == endMarker
+        }) else {
+            return .failure("Structured output is missing \(endMarker).")
+        }
+        let payload = lines[(startIndex + 1)..<endIndex]
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !payload.isEmpty else {
+            return .failure("Structured output \(name) block is empty.")
+        }
+        return .success(payload)
     }
 
     private static func apply(
@@ -898,4 +1068,10 @@ enum WorkspaceAppStudioBuilder {
 private struct WorkspaceAppStudioPatchError: Error, Equatable {
     var path: String
     var message: String
+}
+
+private enum WorkspaceAppStudioStructuredBlock: Equatable {
+    case success(String)
+    case notFound
+    case failure(String)
 }

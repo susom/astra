@@ -756,6 +756,120 @@ struct WorkspaceHomePresentationTests {
         ])
     }
 
+    @Test("App Studio accepts validated structured manifest output")
+    func appStudioAcceptsValidatedStructuredManifestOutput() throws {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+        var replacement = draft.manifest
+        replacement.app.name = "Pantry Inventory"
+        replacement.app.description = "Track pantry records with a reviewed app manifest."
+        let replacementJSON = String(
+            decoding: try WorkspaceAppService.encodeManifest(replacement),
+            as: UTF8.self
+        )
+
+        let result = WorkspaceAppStudioBuilder.applyStructuredOutput(
+            """
+            I drafted the full app manifest.
+
+            ASTRA_APP_MANIFEST
+            \(replacementJSON)
+            END_ASTRA_APP_MANIFEST
+            """,
+            to: draft.manifest
+        )
+
+        #expect(result.accepted)
+        #expect(result.canPublish)
+        #expect(result.kind == .manifest)
+        #expect(result.rejectedManifest == nil)
+        #expect(result.manifest.app.name == "Pantry Inventory")
+        #expect(result.manifest.app.description == "Track pantry records with a reviewed app manifest.")
+    }
+
+    @Test("App Studio rejects invalid structured manifest output and preserves last valid manifest")
+    func appStudioRejectsInvalidStructuredManifestOutputAndPreservesLastValidManifest() throws {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+        var invalid = draft.manifest
+        invalid.storage?.tables.removeAll { $0.name == "items" }
+        let invalidJSON = String(
+            decoding: try WorkspaceAppService.encodeManifest(invalid),
+            as: UTF8.self
+        )
+
+        let result = WorkspaceAppStudioBuilder.applyStructuredOutput(
+            """
+            ASTRA_APP_MANIFEST
+            \(invalidJSON)
+            END_ASTRA_APP_MANIFEST
+            """,
+            to: draft.manifest
+        )
+
+        #expect(!result.accepted)
+        #expect(!result.canPublish)
+        #expect(result.kind == .manifest)
+        #expect(result.manifest == draft.manifest)
+        #expect(result.rejectedManifest?.storage?.tables.map(\.name) == ["shopping_lists", "purchases"])
+        #expect(result.validationReport.blockers.contains {
+            $0.path.contains("/views") && $0.message.contains("unknown storage table 'items'")
+        })
+    }
+
+    @Test("App Studio applies structured patch output and rejects ambiguous blocks")
+    func appStudioAppliesStructuredPatchOutputAndRejectsAmbiguousBlocks() throws {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+
+        let accepted = WorkspaceAppStudioBuilder.applyStructuredOutput(
+            """
+            ASTRA_APP_PATCH
+            [
+              {"op": "replace", "path": "/app/name", "value": "Weekend Grocery App"}
+            ]
+            END_ASTRA_APP_PATCH
+            """,
+            to: draft.manifest
+        )
+
+        #expect(accepted.accepted)
+        #expect(accepted.kind == .patch)
+        #expect(accepted.manifest.app.name == "Weekend Grocery App")
+
+        let ambiguous = WorkspaceAppStudioBuilder.applyStructuredOutput(
+            """
+            ASTRA_APP_MANIFEST
+            {}
+            END_ASTRA_APP_MANIFEST
+            ASTRA_APP_PATCH
+            []
+            END_ASTRA_APP_PATCH
+            """,
+            to: draft.manifest
+        )
+
+        #expect(!ambiguous.accepted)
+        #expect(ambiguous.kind == nil)
+        #expect(ambiguous.manifest == draft.manifest)
+        #expect(ambiguous.validationReport.blockers == [
+            WorkspaceAppManifestValidationReport.Issue(
+                severity: .blocker,
+                path: "/structuredOutput",
+                message: "Structured output must include either ASTRA_APP_MANIFEST or ASTRA_APP_PATCH, not both."
+            )
+        ])
+    }
+
     @Test("App Studio ideates reconciliation apps from BigQuery and REDCap context")
     func appStudioIdeatesReconciliationAppsFromContext() {
         let ideas = WorkspaceAppStudioIdeator.proposals(
