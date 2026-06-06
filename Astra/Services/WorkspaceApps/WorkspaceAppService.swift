@@ -31,6 +31,7 @@ struct WorkspaceAppCreationResult {
 struct WorkspaceAppService {
     var fileManager: FileManager = .default
     var storageService = WorkspaceAppStorageService()
+    var contractRegistry = WorkspaceAppContractRegistry()
 
     @MainActor
     func createApp(
@@ -80,7 +81,7 @@ struct WorkspaceAppService {
             appDescription: manifest.app.description,
             lifecycleStatus: status,
             permissionMode: manifest.permissions.defaultMode,
-            dependencyStatus: manifest.requirements.isEmpty ? .ready : .unresolved,
+            dependencyStatus: .ready,
             manifestRelativePath: WorkspaceFileLayout.relativeAppManifestFile(appID: appID),
             appDirectoryRelativePath: WorkspaceFileLayout.relativeAppDirectory(appID: appID),
             manifestDigest: Self.digest(for: manifestData),
@@ -90,7 +91,18 @@ struct WorkspaceAppService {
             createdAt: now,
             updatedAt: now
         )
+        let bindings = dependencyBindings(
+            for: manifest.requirements,
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: appID,
+            now: now
+        )
+        app.dependencyStatus = dependencyStatus(for: bindings)
         modelContext.insert(app)
+        for binding in bindings {
+            modelContext.insert(binding)
+        }
         workspace.updatedAt = now
         try modelContext.save()
 
@@ -103,6 +115,52 @@ struct WorkspaceAppService {
         ])
 
         return WorkspaceAppCreationResult(app: app, manifestURL: URL(fileURLWithPath: manifestPath))
+    }
+
+    private func dependencyBindings(
+        for requirements: [WorkspaceAppRequirement],
+        workspaceID: UUID,
+        appID: UUID,
+        appLogicalID: String,
+        now: Date
+    ) -> [WorkspaceAppDependencyBinding] {
+        contractRegistry.resolveAll(requirements).map { resolution in
+            let selected = resolution.selectedImplementation
+            return WorkspaceAppDependencyBinding(
+                workspaceID: workspaceID,
+                appID: appID,
+                appLogicalID: appLogicalID,
+                requirementID: resolution.requirement.id,
+                contract: resolution.requirement.contract,
+                operations: resolution.requirement.operations,
+                optional: resolution.requirement.optional,
+                status: bindingStatus(for: resolution),
+                implementationID: selected?.id,
+                provider: selected?.provider,
+                transport: selected?.transport,
+                createdAt: now,
+                updatedAt: now
+            )
+        }
+    }
+
+    private func bindingStatus(
+        for resolution: WorkspaceAppContractResolution
+    ) -> WorkspaceAppDependencyBindingStatus {
+        if resolution.selectedImplementation != nil {
+            return .mapped
+        }
+        return resolution.requirement.optional ? .optionalMissing : .missingRequired
+    }
+
+    private func dependencyStatus(
+        for bindings: [WorkspaceAppDependencyBinding]
+    ) -> WorkspaceAppDependencyStatus {
+        guard !bindings.isEmpty else { return .ready }
+        if bindings.contains(where: { $0.status == .missingRequired }) {
+            return .missingRequired
+        }
+        return .ready
     }
 
     @MainActor

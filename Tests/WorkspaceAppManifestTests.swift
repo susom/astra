@@ -246,7 +246,7 @@ struct WorkspaceAppManifestTests {
         #expect(result.app.manifestRelativePath == ".astra/apps/enrollment-reconciliation/manifest.json")
         #expect(result.app.appDirectoryRelativePath == ".astra/apps/enrollment-reconciliation")
         #expect(result.app.permissionMode == .readOnly)
-        #expect(result.app.dependencyStatus == .unresolved)
+        #expect(result.app.dependencyStatus == .ready)
 
         let data = try Data(contentsOf: result.manifestURL)
         #expect(result.app.manifestDigest == WorkspaceAppService.digest(for: data))
@@ -257,6 +257,54 @@ struct WorkspaceAppManifestTests {
         let apps = try context.fetch(FetchDescriptor<WorkspaceApp>())
         #expect(apps.count == 1)
         #expect(apps[0].workspaceID == workspace.id)
+
+        let bindings = try context.fetch(FetchDescriptor<WorkspaceAppDependencyBinding>())
+            .sorted { $0.requirementID < $1.requirementID }
+        #expect(bindings.count == 2)
+        #expect(bindings[0].appID == result.app.id)
+        #expect(bindings[0].appLogicalID == "enrollment-reconciliation")
+        #expect(bindings[0].requirementID == "sourceWarehouse")
+        #expect(bindings[0].contract == "tabularQuery.read")
+        #expect(bindings[0].operations == ["describeTable", "runReadOnlyQuery"])
+        #expect(bindings[0].status == .mapped)
+        #expect(bindings[0].implementationID == "bigquery-read-task-backed")
+        #expect(bindings[0].provider == "bigQuery")
+        #expect(bindings[0].transport == .taskBacked)
+        #expect(bindings[1].requirementID == "targetRecords")
+        #expect(bindings[1].status == .mapped)
+        #expect(bindings[1].implementationID == "redcap-read-task-backed")
+    }
+
+    @MainActor
+    @Test("service marks apps missing required dependencies when no compatible contract implementation exists")
+    func serviceMarksAppsMissingRequiredDependencies() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-missing-dependency-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let workspace = Workspace(name: "Apps", primaryPath: root.path)
+        context.insert(workspace)
+
+        let result = try WorkspaceAppService(
+            contractRegistry: WorkspaceAppContractRegistry(implementations: [])
+        ).createApp(
+            manifest: Self.reconciliationManifest(),
+            in: workspace,
+            modelContext: context
+        )
+
+        #expect(result.app.dependencyStatus == .missingRequired)
+        let bindings = try context.fetch(FetchDescriptor<WorkspaceAppDependencyBinding>())
+        #expect(bindings.count == 2)
+        #expect(bindings.allSatisfy { $0.status == .missingRequired })
+        #expect(bindings.allSatisfy { $0.implementationID == nil })
     }
 
     @MainActor

@@ -47,6 +47,11 @@ struct SchemaVersionTests {
         #expect(ASTRASchemaV8.models.count == 13)
     }
 
+    @Test("SchemaV9 declares Workspace App dependency bindings")
+    func v9ModelCount() {
+        #expect(ASTRASchemaV9.models.count == 14)
+    }
+
     @Test("SchemaV1 version identifier is 1.0.0")
     func v1VersionIdentifier() {
         #expect(ASTRASchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
@@ -87,14 +92,19 @@ struct SchemaVersionTests {
         #expect(ASTRASchemaV8.versionIdentifier == Schema.Version(8, 0, 0))
     }
 
-    @Test("Migration plan lists SchemaV1 through SchemaV8")
-    func migrationPlanHasVersions() {
-        #expect(ASTRAMigrationPlan.schemas.count == 8)
+    @Test("SchemaV9 version identifier is 9.0.0")
+    func v9VersionIdentifier() {
+        #expect(ASTRASchemaV9.versionIdentifier == Schema.Version(9, 0, 0))
     }
 
-    @Test("Migration plan has V1 to V8 lightweight stages")
+    @Test("Migration plan lists SchemaV1 through SchemaV9")
+    func migrationPlanHasVersions() {
+        #expect(ASTRAMigrationPlan.schemas.count == 9)
+    }
+
+    @Test("Migration plan has V1 to V9 lightweight stages")
     func migrationPlanHasStage() {
-        #expect(ASTRAMigrationPlan.stages.count == 7)
+        #expect(ASTRAMigrationPlan.stages.count == 8)
     }
 
     @Test("ModelContainer can be created with versioned schema")
@@ -105,7 +115,7 @@ struct SchemaVersionTests {
             migrationPlan: ASTRAMigrationPlan.self,
             configurations: [config]
         )
-        #expect(container.schema.entities.count == 13)
+        #expect(container.schema.entities.count == 14)
     }
 
     @MainActor
@@ -188,6 +198,8 @@ struct SchemaVersionTests {
         #expect(appRuns.isEmpty)
         let appRunEvents = try context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
         #expect(appRunEvents.isEmpty)
+        let appDependencyBindings = try context.fetch(FetchDescriptor<WorkspaceAppDependencyBinding>())
+        #expect(appDependencyBindings.isEmpty)
     }
 
     @MainActor
@@ -496,5 +508,52 @@ struct SchemaVersionTests {
         #expect(try context.fetch(FetchDescriptor<WorkspaceApp>()).count == 1)
         #expect(try context.fetch(FetchDescriptor<WorkspaceAppRun>()).isEmpty)
         #expect(try context.fetch(FetchDescriptor<WorkspaceAppRunEvent>()).isEmpty)
+    }
+
+    @MainActor
+    @Test("SchemaV8 store migrates to SchemaV9 app dependency binding model")
+    func v8StoreMigratesToWorkspaceAppDependencyBindingModel() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("astra-schema-v8-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let storeURL = root.appendingPathComponent("store.store")
+        var oldContainer: ModelContainer? = try ModelContainer(
+            for: Schema(versionedSchema: ASTRASchemaV8.self),
+            configurations: [ModelConfiguration(url: storeURL)]
+        )
+
+        let oldContext = try #require(oldContainer?.mainContext)
+        let oldWorkspace = Workspace(name: "Legacy V8", primaryPath: "/tmp/legacy-v8")
+        oldContext.insert(oldWorkspace)
+        let oldApp = WorkspaceApp(
+            workspaceID: oldWorkspace.id,
+            logicalID: "legacy-app",
+            name: "Legacy App",
+            manifestRelativePath: ".astra/apps/legacy-app/manifest.json",
+            appDirectoryRelativePath: ".astra/apps/legacy-app",
+            manifestDigest: "digest"
+        )
+        oldContext.insert(oldApp)
+        let oldRun = WorkspaceAppRun(
+            workspaceID: oldWorkspace.id,
+            appID: oldApp.id,
+            appLogicalID: oldApp.logicalID,
+            actionID: "refresh"
+        )
+        oldContext.insert(oldRun)
+        try oldContext.save()
+        oldContainer = nil
+
+        let migratedContainer = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(url: storeURL)]
+        )
+        let context = migratedContainer.mainContext
+        #expect(try context.fetch(FetchDescriptor<WorkspaceApp>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppRun>()).count == 1)
+        #expect(try context.fetch(FetchDescriptor<WorkspaceAppDependencyBinding>()).isEmpty)
     }
 }
