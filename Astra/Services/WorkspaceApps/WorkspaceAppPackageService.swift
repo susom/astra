@@ -30,6 +30,7 @@ struct WorkspaceAppPackageManifest: Codable, Sendable, Equatable {
     var exportMode: WorkspaceAppPackageExportMode
     var createdAt: Date
     var author: String?
+    var trustMetadata: WorkspaceAppPackageTrustMetadata?
     var requiredContracts: [WorkspaceAppPackageContractRequirement]
     var implementationDescriptors: [WorkspaceAppContractImplementation]
 
@@ -43,6 +44,7 @@ struct WorkspaceAppPackageManifest: Codable, Sendable, Equatable {
         case exportMode
         case createdAt
         case author
+        case trustMetadata
         case requiredContracts
         case implementationDescriptors
     }
@@ -57,6 +59,7 @@ struct WorkspaceAppPackageManifest: Codable, Sendable, Equatable {
         exportMode: WorkspaceAppPackageExportMode,
         createdAt: Date,
         author: String?,
+        trustMetadata: WorkspaceAppPackageTrustMetadata? = nil,
         requiredContracts: [WorkspaceAppPackageContractRequirement],
         implementationDescriptors: [WorkspaceAppContractImplementation] = []
     ) {
@@ -69,6 +72,7 @@ struct WorkspaceAppPackageManifest: Codable, Sendable, Equatable {
         self.exportMode = exportMode
         self.createdAt = createdAt
         self.author = author
+        self.trustMetadata = trustMetadata
         self.requiredContracts = requiredContracts
         self.implementationDescriptors = implementationDescriptors
     }
@@ -84,9 +88,19 @@ struct WorkspaceAppPackageManifest: Codable, Sendable, Equatable {
         exportMode = try container.decode(WorkspaceAppPackageExportMode.self, forKey: .exportMode)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         author = try container.decodeIfPresent(String.self, forKey: .author)
+        trustMetadata = try container.decodeIfPresent(WorkspaceAppPackageTrustMetadata.self, forKey: .trustMetadata)
         requiredContracts = try container.decodeIfPresent([WorkspaceAppPackageContractRequirement].self, forKey: .requiredContracts) ?? []
         implementationDescriptors = try container.decodeIfPresent([WorkspaceAppContractImplementation].self, forKey: .implementationDescriptors) ?? []
     }
+}
+
+struct WorkspaceAppPackageTrustMetadata: Codable, Sendable, Equatable {
+    var signerIdentity: String?
+    var signedAt: Date?
+    var packageDigest: String?
+    var trustSource: String?
+    var revocationStatus: String?
+    var signatureValidationResult: String?
 }
 
 struct WorkspaceAppPackageContractRequirement: Codable, Sendable, Equatable {
@@ -315,6 +329,7 @@ struct WorkspaceAppPackageService {
             if package.sourceManifestDigest != digest(for: packageURL.appendingPathComponent("manifest.json")) {
                 issues.append(blocker("/package.json/sourceManifestDigest", "Package manifest digest does not match manifest.json."))
             }
+            validateTrustMetadata(package.trustMetadata, issues: &issues)
             validateImplementationDescriptors(package.implementationDescriptors, issues: &issues)
         }
         if let declaredChecksums {
@@ -729,6 +744,45 @@ struct WorkspaceAppPackageService {
         }
     }
 
+    private func validateTrustMetadata(
+        _ metadata: WorkspaceAppPackageTrustMetadata?,
+        issues: inout [WorkspaceAppPackageValidationReport.Issue]
+    ) {
+        guard let metadata else { return }
+        let signerIdentity = metadata.signerIdentity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trustSource = metadata.trustSource?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if signerIdentity.isEmpty && trustSource.isEmpty {
+            issues.append(blocker("/package.json/trustMetadata", "Package trust metadata must declare a signer identity or trust source."))
+        }
+
+        if let packageDigest = metadata.packageDigest?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !packageDigest.isEmpty,
+           !Self.isHexDigest(packageDigest) {
+            issues.append(blocker("/package.json/trustMetadata/packageDigest", "Package trust digest must be a lowercase SHA-256 hex digest."))
+        }
+
+        let revocationStatus = metadata.revocationStatus?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if revocationStatus == "revoked" {
+            issues.append(blocker("/package.json/trustMetadata/revocationStatus", "Package signer trust has been revoked."))
+        } else if let revocationStatus,
+                  !revocationStatus.isEmpty,
+                  !["unknown", "notrevoked", "not_revoked"].contains(revocationStatus) {
+            issues.append(warning("/package.json/trustMetadata/revocationStatus", "Package revocation status '\(revocationStatus)' is not recognized by this ASTRA version."))
+        }
+
+        let validationResult = metadata.signatureValidationResult?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch validationResult {
+        case "valid", nil:
+            break
+        case "invalid":
+            issues.append(blocker("/package.json/trustMetadata/signatureValidationResult", "Package signature validation failed."))
+        case "unsigned", "unverified", "missing":
+            issues.append(warning("/package.json/trustMetadata/signatureValidationResult", "Package trust metadata is \(validationResult ?? "unverified") and should be reviewed before import."))
+        default:
+            issues.append(warning("/package.json/trustMetadata/signatureValidationResult", "Package signature validation result '\(validationResult ?? "")' is not recognized by this ASTRA version."))
+        }
+    }
+
     private func validateNoForbiddenPortableContent(
         packageURL: URL,
         issues: inout [WorkspaceAppPackageValidationReport.Issue]
@@ -775,6 +829,13 @@ struct WorkspaceAppPackageService {
             && !path.hasPrefix("/")
             && !path.contains("..")
             && !path.contains("\\")
+    }
+
+    private static func isHexDigest(_ value: String) -> Bool {
+        let hexCharacters = Set("0123456789abcdef")
+        return value.count == 64 && value.allSatisfy { character in
+            hexCharacters.contains(character)
+        }
     }
 
     private func installState(

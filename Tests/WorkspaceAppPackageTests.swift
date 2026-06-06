@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftData
 import Testing
@@ -289,6 +290,78 @@ struct WorkspaceAppPackageTests {
         #expect(review.dependencyMappings.count == 1)
         #expect(review.dependencyMappings[0].selectedImplementation?.id == "warehouse-api-http")
         #expect(review.dependencyMappings[0].selectedImplementation?.transport == .http)
+    }
+
+    @Test("package import review exposes unverified trust metadata")
+    func packageImportReviewExposesUnverifiedTrustMetadata() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("trusted-grocery.astra-app", isDirectory: true)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-template",
+            version: "1.2.3"
+        )
+        try Self.updatePackageTrustMetadata(
+            at: packageURL,
+            trustMetadata: WorkspaceAppPackageTrustMetadata(
+                signerIdentity: "ASTRA Team",
+                signedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                packageDigest: String(repeating: "a", count: 64),
+                trustSource: "ASTRA Apps",
+                revocationStatus: "notRevoked",
+                signatureValidationResult: "unverified"
+            )
+        )
+
+        let review = WorkspaceAppPackageImportReviewer.review(packageURL: packageURL)
+
+        #expect(review.canInstall)
+        #expect(review.trustSummary?.signerIdentity == "ASTRA Team")
+        #expect(review.trustSummary?.trustSource == "ASTRA Apps")
+        #expect(review.trustSummary?.statusLabel == "Unverified")
+        #expect(review.trustSummary?.packageDigest == String(repeating: "a", count: 64))
+        #expect(review.report.warnings.contains {
+            $0.path == "/package.json/trustMetadata/signatureValidationResult"
+                && $0.message.contains("unverified")
+        })
+    }
+
+    @Test("package validation blocks revoked and invalid trust metadata")
+    func packageValidationBlocksRevokedAndInvalidTrustMetadata() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("revoked-grocery.astra-app", isDirectory: true)
+        _ = try WorkspaceAppPackageService().exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-template",
+            version: "1.2.3"
+        )
+        try Self.updatePackageTrustMetadata(
+            at: packageURL,
+            trustMetadata: WorkspaceAppPackageTrustMetadata(
+                signerIdentity: "ASTRA Team",
+                signedAt: nil,
+                packageDigest: String(repeating: "b", count: 64),
+                trustSource: "ASTRA Apps",
+                revocationStatus: "revoked",
+                signatureValidationResult: "invalid"
+            )
+        )
+
+        let report = WorkspaceAppPackageService().validatePackage(at: packageURL)
+
+        #expect(!report.canInstall)
+        #expect(report.blockers.contains {
+            $0.path == "/package.json/trustMetadata/revocationStatus"
+                && $0.message.contains("revoked")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/package.json/trustMetadata/signatureValidationResult"
+                && $0.message.contains("failed")
+        })
     }
 
     @Test("package validation blocks invalid implementation descriptors")
@@ -676,6 +749,62 @@ struct WorkspaceAppPackageTests {
             databaseURL: databaseURL
         )
         return databaseURL
+    }
+
+    static func updatePackageTrustMetadata(
+        at packageURL: URL,
+        trustMetadata: WorkspaceAppPackageTrustMetadata
+    ) throws {
+        let packageJSONURL = packageURL.appendingPathComponent("package.json")
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        var package = try decoder.decode(
+            WorkspaceAppPackageManifest.self,
+            from: Data(contentsOf: packageJSONURL)
+        )
+        package.trustMetadata = trustMetadata
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(package).write(to: packageJSONURL, options: [.atomic])
+        try rewriteChecksums(at: packageURL)
+    }
+
+    static func rewriteChecksums(at packageURL: URL) throws {
+        let checksums = try portableFilePaths(in: packageURL)
+            .filter { $0 != "checksums.json" }
+            .map { path in
+                let data = try Data(contentsOf: packageURL.appendingPathComponent(path))
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                return WorkspaceAppPackageChecksum(path: path, sha256: digest)
+            }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(checksums)
+            .write(to: packageURL.appendingPathComponent("checksums.json"), options: [.atomic])
+    }
+
+    static func portableFilePaths(in packageURL: URL) throws -> [String] {
+        let fileManager = FileManager.default
+        guard let enumerator = fileManager.enumerator(
+            at: packageURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+        return try enumerator.compactMap { item in
+            guard let url = item as? URL,
+                  try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                return nil
+            }
+            let basePath = packageURL.standardizedFileURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let filePath = url.standardizedFileURL.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard filePath.hasPrefix("\(basePath)/") else { return nil }
+            return String(filePath.dropFirst(basePath.count + 1))
+        }
+        .sorted()
     }
 
     static func groceryManifest() -> WorkspaceAppManifest {

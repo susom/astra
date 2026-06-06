@@ -27,6 +27,24 @@ struct WorkspaceAppPackageDependencyMapping: Identifiable, Equatable {
     }
 }
 
+struct WorkspaceAppPackageTrustSummary: Equatable {
+    var signerIdentity: String
+    var trustSource: String
+    var revocationStatus: String
+    var signatureValidationResult: String
+    var packageDigest: String
+
+    var statusLabel: String {
+        if signatureValidationResult == "valid" {
+            return revocationStatus.isEmpty ? "Valid" : "Valid, \(revocationStatus)"
+        }
+        if signatureValidationResult.isEmpty {
+            return revocationStatus.isEmpty ? "Declared" : "Declared, \(revocationStatus)"
+        }
+        return signatureValidationResult.capitalized
+    }
+}
+
 struct WorkspaceAppPackageImportReview: Identifiable, Equatable {
     var id = UUID()
     var packageURL: URL
@@ -85,6 +103,17 @@ struct WorkspaceAppPackageImportReview: Identifiable, Equatable {
         report.manifest?.automations.count ?? 0
     }
 
+    var trustSummary: WorkspaceAppPackageTrustSummary? {
+        guard let metadata = report.package?.trustMetadata else { return nil }
+        return WorkspaceAppPackageTrustSummary(
+            signerIdentity: normalized(metadata.signerIdentity, fallback: "Unknown signer"),
+            trustSource: normalized(metadata.trustSource, fallback: "Package metadata"),
+            revocationStatus: normalized(metadata.revocationStatus, fallback: ""),
+            signatureValidationResult: normalized(metadata.signatureValidationResult, fallback: ""),
+            packageDigest: normalized(metadata.packageDigest, fallback: "Not declared")
+        )
+    }
+
     var canInstall: Bool {
         report.canInstall
     }
@@ -115,6 +144,11 @@ struct WorkspaceAppPackageImportReview: Identifiable, Equatable {
                 candidateImplementations: resolution.implementations
             )
         }
+    }
+
+    private func normalized(_ value: String?, fallback: String) -> String {
+        let normalizedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return normalizedValue.isEmpty ? fallback : normalizedValue
     }
 }
 

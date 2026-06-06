@@ -12,6 +12,7 @@ struct WorkspaceAppPackageImportReviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     identitySection
+                    trustSection
                     dependencySection
                     storageSection
                     validationSection
@@ -66,6 +67,18 @@ struct WorkspaceAppPackageImportReviewView: View {
             infoRow("Minimum ASTRA", review.minimumASTRAVersion)
             infoRow("Permission Mode", review.permissionMode.rawValue)
             infoRow("Automations", review.automationCount == 0 ? "None" : "\(review.automationCount), disabled until enabled")
+        }
+    }
+
+    @ViewBuilder
+    private var trustSection: some View {
+        if let trustSummary = review.trustSummary {
+            reviewSection("Trust", count: nil) {
+                infoRow("Signer", trustSummary.signerIdentity)
+                infoRow("Source", trustSummary.trustSource)
+                infoRow("Status", trustSummary.statusLabel)
+                infoRow("Digest", trustSummary.packageDigest)
+            }
         }
     }
 
