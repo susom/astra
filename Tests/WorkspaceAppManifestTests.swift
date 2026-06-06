@@ -228,7 +228,15 @@ struct WorkspaceAppManifestTests {
         let workspace = Workspace(name: "Apps", primaryPath: root.path)
         context.insert(workspace)
 
-        let manifest = Self.reconciliationManifest()
+        var manifest = Self.reconciliationManifest()
+        manifest.automations = [
+            WorkspaceAppAutomationSpec(
+                id: "hourly-refresh",
+                type: "schedule",
+                enabledByDefault: false,
+                action: "refresh"
+            )
+        ]
         let result = try WorkspaceAppService().createApp(
             manifest: manifest,
             in: workspace,
@@ -273,6 +281,16 @@ struct WorkspaceAppManifestTests {
         #expect(bindings[1].requirementID == "targetRecords")
         #expect(bindings[1].status == .mapped)
         #expect(bindings[1].implementationID == "redcap-read-task-backed")
+
+        let automations = try context.fetch(FetchDescriptor<WorkspaceAppAutomationState>())
+        #expect(automations.count == 1)
+        #expect(automations[0].appID == result.app.id)
+        #expect(automations[0].appLogicalID == "enrollment-reconciliation")
+        #expect(automations[0].automationID == "hourly-refresh")
+        #expect(automations[0].automationType == "schedule")
+        #expect(automations[0].actionID == "refresh")
+        #expect(automations[0].isEnabled == false)
+        #expect(automations[0].status == .disabled)
     }
 
     @MainActor
@@ -373,6 +391,70 @@ struct WorkspaceAppManifestTests {
         #expect(bindings.allSatisfy { $0.status == .mapped })
         #expect(bindings.first { $0.requirementID == "sourceWarehouse" }?.implementationID == "bigquery-read-task-backed")
         #expect(bindings.first { $0.requirementID == "targetRecords" }?.implementationID == "redcap-read-task-backed")
+    }
+
+    @MainActor
+    @Test("service enables automation state without editing the app manifest")
+    func serviceEnablesAutomationStateWithoutEditingManifest() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-enable-automation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let workspace = Workspace(name: "Apps", primaryPath: root.path)
+        context.insert(workspace)
+
+        var manifest = Self.reconciliationManifest()
+        manifest.automations = [
+            WorkspaceAppAutomationSpec(
+                id: "daily-refresh",
+                type: "schedule",
+                enabledByDefault: false,
+                action: "refresh"
+            )
+        ]
+
+        let service = WorkspaceAppService()
+        let result = try service.createApp(
+            manifest: manifest,
+            in: workspace,
+            modelContext: context
+        )
+        let originalManifestData = try Data(contentsOf: result.manifestURL)
+        let enabledAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        try service.setAutomationEnabled(
+            app: result.app,
+            automationID: "daily-refresh",
+            isEnabled: true,
+            workspace: workspace,
+            modelContext: context,
+            now: enabledAt
+        )
+
+        let automations = try service.automationStates(for: result.app, modelContext: context)
+        #expect(automations.count == 1)
+        #expect(automations[0].isEnabled)
+        #expect(automations[0].status == .enabled)
+        #expect(automations[0].updatedAt == enabledAt)
+        #expect(result.app.updatedAt == enabledAt)
+        #expect(try Data(contentsOf: result.manifestURL) == originalManifestData)
+
+        #expect(throws: WorkspaceAppServiceError.missingAutomation("missing")) {
+            try service.setAutomationEnabled(
+                app: result.app,
+                automationID: "missing",
+                isEnabled: true,
+                workspace: workspace,
+                modelContext: context
+            )
+        }
     }
 
     @MainActor

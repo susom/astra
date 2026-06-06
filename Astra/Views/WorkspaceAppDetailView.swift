@@ -10,6 +10,7 @@ struct WorkspaceAppDetailView: View {
     let onRunAction: (WorkspaceAppActionSpec, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
 
     @Query(sort: \WorkspaceAppDependencyBinding.requirementID) private var dependencyBindings: [WorkspaceAppDependencyBinding]
+    @Query(sort: \WorkspaceAppAutomationState.automationID) private var automationStates: [WorkspaceAppAutomationState]
     @State private var dataSnapshot = WorkspaceAppDetailDataSnapshot.empty
     @State private var actionStatusMessage = ""
     @State private var packageStatusMessage = ""
@@ -32,6 +33,7 @@ struct WorkspaceAppDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     appSurface
                     dependencySection
+                    automationSection
                     nativeSurfaceSection
                     actionsSection
                     storageSection
@@ -193,6 +195,35 @@ struct WorkspaceAppDetailView: View {
     }
 
     @ViewBuilder
+    private var automationSection: some View {
+        if !dataSnapshot.automationStates.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Automations")
+                        .font(Stanford.ui(15, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    Text("\(dataSnapshot.automationStates.count)")
+                        .font(Stanford.caption(11).weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 220, maximum: 340), spacing: 10, alignment: .top)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    ForEach(dataSnapshot.automationStates, id: \.automationID) { automation in
+                        WorkspaceAppAutomationStateCard(automation: automation)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var nativeSurfaceSection: some View {
         let surface = WorkspaceAppNativeSurfaceBuilder.presentation(
             manifest: dataSnapshot.manifest,
@@ -327,7 +358,8 @@ struct WorkspaceAppDetailView: View {
         dataSnapshot = WorkspaceAppDetailDataLoader().load(
             app: app,
             workspace: workspace,
-            dependencyBindings: dependencyBindings
+            dependencyBindings: dependencyBindings,
+            automationStates: automationStates
         )
     }
 
@@ -796,6 +828,92 @@ private struct WorkspaceAppDependencyBindingCard: View {
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
         .help("\(binding.contract): \(targetLabel)")
+    }
+}
+
+private struct WorkspaceAppAutomationStateCard: View {
+    let automation: WorkspaceAppAutomationStateSnapshot
+
+    private var statusLabel: String {
+        switch automation.status {
+        case .disabled:
+            "Disabled"
+        case .enabled:
+            "Enabled"
+        case .blocked:
+            "Blocked"
+        }
+    }
+
+    private var statusIcon: String {
+        switch automation.status {
+        case .disabled:
+            "pause.circle"
+        case .enabled:
+            "play.circle"
+        case .blocked:
+            "exclamationmark.octagon"
+        }
+    }
+
+    private var statusColor: Color {
+        switch automation.status {
+        case .disabled:
+            .secondary
+        case .enabled:
+            Stanford.statusHealthy
+        case .blocked:
+            Stanford.statusWarn
+        }
+    }
+
+    private var actionLabel: String {
+        automation.actionID.map { "Runs \($0)" } ?? "No action bound"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(automation.automationID)
+                    .font(Stanford.ui(13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 8)
+
+                Label(statusLabel, systemImage: statusIcon)
+                    .font(Stanford.caption(10).weight(.semibold))
+                    .foregroundStyle(statusColor)
+                    .lineLimit(1)
+            }
+
+            Text(automation.automationType)
+                .font(Stanford.caption(12).weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Text(actionLabel)
+                .font(Stanford.caption(12))
+                .foregroundStyle(.primary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(automation.isEnabled ? "Runs only after local approval." : "Installed disabled by default.")
+                .font(Stanford.caption(11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 104, alignment: .topLeading)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+        .help("\(automation.automationType): \(statusLabel)")
     }
 }
 

@@ -11,6 +11,16 @@ struct WorkspaceAppDependencyBindingSnapshot: Equatable {
     var transport: WorkspaceAppContractTransport?
 }
 
+struct WorkspaceAppAutomationStateSnapshot: Equatable {
+    var automationID: String
+    var automationType: String
+    var actionID: String?
+    var isEnabled: Bool
+    var status: WorkspaceAppAutomationStateStatus
+    var lastRunAt: Date?
+    var nextRunAt: Date?
+}
+
 struct WorkspaceAppStorageTableSnapshot: Equatable {
     var name: String
     var columns: [String]
@@ -26,12 +36,14 @@ struct WorkspaceAppDetailDataSnapshot: Equatable {
     var manifest: WorkspaceAppManifest?
     var storageTables: [WorkspaceAppStorageTableSnapshot]
     var dependencyBindings: [WorkspaceAppDependencyBindingSnapshot]
+    var automationStates: [WorkspaceAppAutomationStateSnapshot]
     var errorMessage: String?
 
     static let empty = WorkspaceAppDetailDataSnapshot(
         manifest: nil,
         storageTables: [],
         dependencyBindings: [],
+        automationStates: [],
         errorMessage: nil
     )
 }
@@ -43,13 +55,15 @@ struct WorkspaceAppDetailDataLoader {
     func load(
         app: WorkspaceApp,
         workspace: Workspace?,
-        dependencyBindings: [WorkspaceAppDependencyBinding] = []
+        dependencyBindings: [WorkspaceAppDependencyBinding] = [],
+        automationStates: [WorkspaceAppAutomationState] = []
     ) -> WorkspaceAppDetailDataSnapshot {
         guard let workspace, !workspace.primaryPath.isEmpty else {
             return WorkspaceAppDetailDataSnapshot(
                 manifest: nil,
                 storageTables: [],
                 dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
+                automationStates: automationSnapshots(automationStates, appID: app.id),
                 errorMessage: "Workspace path is unavailable."
             )
         }
@@ -73,6 +87,7 @@ struct WorkspaceAppDetailDataLoader {
                 manifest: manifest,
                 storageTables: tables,
                 dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
+                automationStates: automationSnapshots(automationStates, appID: app.id),
                 errorMessage: nil
             )
         } catch {
@@ -80,6 +95,7 @@ struct WorkspaceAppDetailDataLoader {
                 manifest: nil,
                 storageTables: [],
                 dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
+                automationStates: automationSnapshots(automationStates, appID: app.id),
                 errorMessage: "Could not load app manifest."
             )
         }
@@ -102,6 +118,26 @@ struct WorkspaceAppDetailDataLoader {
                     implementationID: binding.implementationID,
                     provider: binding.provider,
                     transport: binding.transport
+                )
+            }
+    }
+
+    private func automationSnapshots(
+        _ automations: [WorkspaceAppAutomationState],
+        appID: UUID
+    ) -> [WorkspaceAppAutomationStateSnapshot] {
+        automations
+            .filter { $0.appID == appID }
+            .sorted { $0.automationID < $1.automationID }
+            .map { automation in
+                WorkspaceAppAutomationStateSnapshot(
+                    automationID: automation.automationID,
+                    automationType: automation.automationType,
+                    actionID: automation.actionID,
+                    isEnabled: automation.isEnabled,
+                    status: automation.status,
+                    lastRunAt: automation.lastRunAt,
+                    nextRunAt: automation.nextRunAt
                 )
             }
     }

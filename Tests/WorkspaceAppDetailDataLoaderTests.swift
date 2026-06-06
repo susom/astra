@@ -149,6 +149,80 @@ struct WorkspaceAppDetailDataLoaderTests {
         ])
     }
 
+    @Test("loader includes automation states for the selected app")
+    func loaderIncludesAutomationStatesForSelectedApp() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-detail-automations-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(name: "Automation", primaryPath: root.path)
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "auto-app", name: "Automation App"),
+            actions: [WorkspaceAppActionSpec(id: "refresh", type: "pipeline", label: "Refresh")],
+            automations: [
+                WorkspaceAppAutomationSpec(id: "daily-refresh", type: "schedule", action: "refresh")
+            ]
+        )
+        let manifestURL = URL(fileURLWithPath: WorkspaceFileLayout.appManifestFile(
+            workspacePath: workspace.primaryPath,
+            appID: manifest.app.id
+        ))
+        try FileManager.default.createDirectory(at: manifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try WorkspaceAppService.encodeManifest(manifest).write(to: manifestURL)
+
+        let app = WorkspaceApp(
+            workspaceID: workspace.id,
+            logicalID: manifest.app.id,
+            name: manifest.app.name,
+            manifestRelativePath: WorkspaceFileLayout.relativeAppManifestFile(appID: manifest.app.id),
+            appDirectoryRelativePath: WorkspaceFileLayout.relativeAppDirectory(appID: manifest.app.id),
+            manifestDigest: "digest"
+        )
+        let otherAppID = UUID()
+        let automations = [
+            WorkspaceAppAutomationState(
+                workspaceID: workspace.id,
+                appID: otherAppID,
+                appLogicalID: "other",
+                automationID: "other-refresh",
+                automationType: "schedule",
+                actionID: "refresh",
+                isEnabled: true,
+                status: .enabled
+            ),
+            WorkspaceAppAutomationState(
+                workspaceID: workspace.id,
+                appID: app.id,
+                appLogicalID: app.logicalID,
+                automationID: "daily-refresh",
+                automationType: "schedule",
+                actionID: "refresh",
+                isEnabled: false,
+                status: .disabled
+            )
+        ]
+
+        let snapshot = WorkspaceAppDetailDataLoader().load(
+            app: app,
+            workspace: workspace,
+            automationStates: automations
+        )
+
+        #expect(snapshot.errorMessage == nil)
+        #expect(snapshot.automationStates == [
+            WorkspaceAppAutomationStateSnapshot(
+                automationID: "daily-refresh",
+                automationType: "schedule",
+                actionID: "refresh",
+                isEnabled: false,
+                status: .disabled,
+                lastRunAt: nil,
+                nextRunAt: nil
+            )
+        ])
+    }
+
     @Test("loader returns a visible error when manifest is unavailable")
     func loaderReturnsVisibleErrorWhenManifestUnavailable() {
         let workspace = Workspace(name: "Missing", primaryPath: "/tmp/missing-\(UUID().uuidString)")

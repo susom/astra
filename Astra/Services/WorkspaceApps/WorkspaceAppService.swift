@@ -8,6 +8,7 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
     case encodeFailed(String)
     case storageFailed(String)
     case missingDependencyBinding(String)
+    case missingAutomation(String)
     case missingContractImplementation(String)
     case incompatibleContractImplementation(requirementID: String, implementationID: String)
 
@@ -24,6 +25,8 @@ enum WorkspaceAppServiceError: LocalizedError, Equatable {
             return "Could not initialize workspace app storage: \(message)"
         case .missingDependencyBinding(let requirementID):
             return "Workspace app dependency requirement '\(requirementID)' was not found."
+        case .missingAutomation(let automationID):
+            return "Workspace app automation '\(automationID)' was not found."
         case .missingContractImplementation(let implementationID):
             return "Workspace app contract implementation '\(implementationID)' was not found."
         case .incompatibleContractImplementation(let requirementID, let implementationID):
@@ -107,10 +110,20 @@ struct WorkspaceAppService {
             appLogicalID: appID,
             now: now
         )
+        let automations = automationStates(
+            for: manifest.automations,
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: appID,
+            now: now
+        )
         app.dependencyStatus = dependencyStatus(for: bindings)
         modelContext.insert(app)
         for binding in bindings {
             modelContext.insert(binding)
+        }
+        for automation in automations {
+            modelContext.insert(automation)
         }
         workspace.updatedAt = now
         try modelContext.save()
@@ -147,6 +160,29 @@ struct WorkspaceAppService {
                 implementationID: selected?.id,
                 provider: selected?.provider,
                 transport: selected?.transport,
+                createdAt: now,
+                updatedAt: now
+            )
+        }
+    }
+
+    private func automationStates(
+        for automations: [WorkspaceAppAutomationSpec],
+        workspaceID: UUID,
+        appID: UUID,
+        appLogicalID: String,
+        now: Date
+    ) -> [WorkspaceAppAutomationState] {
+        automations.map { automation in
+            WorkspaceAppAutomationState(
+                workspaceID: workspaceID,
+                appID: appID,
+                appLogicalID: appLogicalID,
+                automationID: automation.id,
+                automationType: automation.type,
+                actionID: automation.action,
+                isEnabled: false,
+                status: .disabled,
                 createdAt: now,
                 updatedAt: now
             )
@@ -277,6 +313,52 @@ struct WorkspaceAppService {
             "app_id": app.logicalID,
             "requirement_id": requirementID,
             "implementation_id": implementationID ?? "none",
+            "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
+        ])
+    }
+
+    @MainActor
+    func automationStates(
+        for app: WorkspaceApp,
+        modelContext: ModelContext
+    ) throws -> [WorkspaceAppAutomationState] {
+        let appID = app.id
+        let descriptor = FetchDescriptor<WorkspaceAppAutomationState>(
+            predicate: #Predicate<WorkspaceAppAutomationState> { automation in
+                automation.appID == appID
+            },
+            sortBy: [SortDescriptor(\.automationID)]
+        )
+        return try modelContext.fetch(descriptor)
+    }
+
+    @MainActor
+    func setAutomationEnabled(
+        app: WorkspaceApp,
+        automationID: String,
+        isEnabled: Bool,
+        workspace: Workspace?,
+        modelContext: ModelContext,
+        now: Date = Date()
+    ) throws {
+        let states = try automationStates(for: app, modelContext: modelContext)
+        guard let automation = states.first(where: { $0.automationID == automationID }) else {
+            throw WorkspaceAppServiceError.missingAutomation(automationID)
+        }
+
+        automation.isEnabled = isEnabled
+        automation.status = isEnabled ? .enabled : .disabled
+        automation.updatedAt = now
+        app.updatedAt = now
+        workspace?.updatedAt = now
+        try modelContext.save()
+        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
+
+        AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+            "resource": "workspace_app_automation_state",
+            "result": isEnabled ? "enabled" : "disabled",
+            "app_id": app.logicalID,
+            "automation_id": automationID,
             "workspace_id": workspace?.id.uuidString ?? app.workspaceID.uuidString
         ])
     }

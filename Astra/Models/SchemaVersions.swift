@@ -1587,9 +1587,36 @@ enum ASTRASchemaV9: VersionedSchema {
     }
 }
 
+/// V10 adds durable Workspace App automation state. Manifest automations stay
+/// portable, while local enablement remains disabled until the workspace owner
+/// explicitly turns a schedule, monitor, or pipeline on.
+enum ASTRASchemaV10: VersionedSchema {
+    static var versionIdentifier = Schema.Version(10, 0, 0)
+
+    static var models: [any PersistentModel.Type] {
+        [
+            Workspace.self,
+            AgentTask.self,
+            TaskRun.self,
+            TaskEvent.self,
+            Artifact.self,
+            Skill.self,
+            Connector.self,
+            LocalTool.self,
+            TaskTemplate.self,
+            TaskSchedule.self,
+            WorkspaceApp.self,
+            WorkspaceAppRun.self,
+            WorkspaceAppRunEvent.self,
+            WorkspaceAppDependencyBinding.self,
+            WorkspaceAppAutomationState.self
+        ]
+    }
+}
+
 enum ASTRASchema {
     static var current: Schema {
-        Schema(versionedSchema: ASTRASchemaV9.self)
+        Schema(versionedSchema: ASTRASchemaV10.self)
     }
 }
 
@@ -1604,7 +1631,8 @@ enum ASTRAMigrationPlan: SchemaMigrationPlan {
             ASTRASchemaV6.self,
             ASTRASchemaV7.self,
             ASTRASchemaV8.self,
-            ASTRASchemaV9.self
+            ASTRASchemaV9.self,
+            ASTRASchemaV10.self
         ]
     }
 
@@ -1617,7 +1645,8 @@ enum ASTRAMigrationPlan: SchemaMigrationPlan {
             .lightweight(fromVersion: ASTRASchemaV5.self, toVersion: ASTRASchemaV6.self),
             .lightweight(fromVersion: ASTRASchemaV6.self, toVersion: ASTRASchemaV7.self),
             .lightweight(fromVersion: ASTRASchemaV7.self, toVersion: ASTRASchemaV8.self),
-            .lightweight(fromVersion: ASTRASchemaV8.self, toVersion: ASTRASchemaV9.self)
+            .lightweight(fromVersion: ASTRASchemaV8.self, toVersion: ASTRASchemaV9.self),
+            .lightweight(fromVersion: ASTRASchemaV9.self, toVersion: ASTRASchemaV10.self)
         ]
     }
 }
