@@ -62,6 +62,12 @@ enum WorkspaceFileLayout {
         return (directory as NSString).appendingPathComponent("data")
     }
 
+    static func appPackageExportRoot(workspacePath: String) -> String {
+        let root = appRoot(for: workspacePath)
+        guard !root.isEmpty else { return "" }
+        return (root as NSString).appendingPathComponent("exports")
+    }
+
     static func relativeAppDirectory(appID: String) -> String {
         "\(supportDirectoryName)/apps/\(appID)"
     }

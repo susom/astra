@@ -5,10 +5,12 @@ struct WorkspaceAppDetailView: View {
     let workspace: Workspace?
     let onOpenStudio: () -> Void
     let onRefresh: () -> Void
+    let onExportPackage: () throws -> URL
     let onRunAction: (WorkspaceAppActionSpec, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
 
     @State private var dataSnapshot = WorkspaceAppDetailDataSnapshot.empty
     @State private var actionStatusMessage = ""
+    @State private var packageStatusMessage = ""
 
     private var presentation: WorkspaceAppDetailPresentation {
         WorkspaceAppsPresentation.detail(for: app)
@@ -86,6 +88,16 @@ struct WorkspaceAppDetailView: View {
             }
             .buttonStyle(.borderless)
             .help("Open in App Studio")
+
+            Menu {
+                Button(action: exportPackage) {
+                    Label("Export ASTRA App Package", systemImage: "square.and.arrow.up")
+                }
+            } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Share this app with another ASTRA workspace")
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
@@ -115,6 +127,13 @@ struct WorkspaceAppDetailView: View {
                 .font(Stanford.ui(13))
                 .foregroundStyle(presentation.canRunLocalActions ? .secondary : Stanford.statusWarn)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !packageStatusMessage.isEmpty {
+                Text(packageStatusMessage)
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
@@ -224,6 +243,15 @@ struct WorkspaceAppDetailView: View {
             loadDataSnapshot()
         } catch {
             actionStatusMessage = String(describing: error)
+        }
+    }
+
+    private func exportPackage() {
+        do {
+            let url = try onExportPackage()
+            packageStatusMessage = "Exported ASTRA app package to \(url.lastPathComponent)."
+        } catch {
+            packageStatusMessage = String(describing: error)
         }
     }
 }

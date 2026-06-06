@@ -134,6 +134,46 @@ struct WorkspaceAppPackageTests {
         )))
     }
 
+    @MainActor
+    @Test("package exporter writes workspace-local portable exports without overwriting")
+    func packageExporterWritesWorkspaceLocalPortableExportsWithoutOverwriting() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let workspace = Workspace(name: "Package Export", primaryPath: root.path)
+        container.mainContext.insert(workspace)
+        let created = try WorkspaceAppService().createApp(
+            manifest: Self.groceryManifest(),
+            in: workspace,
+            modelContext: container.mainContext,
+            status: .published
+        )
+        let exporter = WorkspaceAppPackageExporter()
+
+        let first = try exporter.exportTemplatePackage(
+            app: created.app,
+            workspace: workspace,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_000)
+        )
+        let second = try exporter.exportTemplatePackage(
+            app: created.app,
+            workspace: workspace,
+            createdAt: Date(timeIntervalSince1970: 1_800_000_001)
+        )
+
+        #expect(first.packageURL.deletingLastPathComponent().path == WorkspaceFileLayout.appPackageExportRoot(workspacePath: workspace.primaryPath))
+        #expect(first.packageURL.lastPathComponent == "grocery-tracker.astra-app")
+        #expect(second.packageURL.lastPathComponent == "grocery-tracker-2.astra-app")
+        #expect(first.validationReport.canInstall)
+        #expect(FileManager.default.fileExists(atPath: first.packageURL.appendingPathComponent("package.json").path))
+        #expect(FileManager.default.fileExists(atPath: first.packageURL.appendingPathComponent("checksums.json").path))
+        #expect(!FileManager.default.fileExists(atPath: first.packageURL.appendingPathComponent("storage/data/full").path))
+    }
+
     static func temporaryRoot() throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("workspace-app-package-\(UUID().uuidString)", isDirectory: true)

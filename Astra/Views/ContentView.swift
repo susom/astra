@@ -581,6 +581,7 @@ struct ContentView: View {
             onDeleteWorkspace: deleteWorkspace,
             onRenameWorkspace: beginRenamingWorkspace,
             onOpenAppStudio: openWorkspaceAppStudio,
+            onExportApp: exportWorkspaceAppPackageFromSidebar,
             onNewSchedule: showNewSchedule,
             onEditSchedule: beginEditingSchedule,
             isSearchActive: $isSearchActive
@@ -650,6 +651,7 @@ struct ContentView: View {
             onOpenApp: openWorkspaceApp,
             onOpenAppStudio: openWorkspaceAppStudio,
             onRefreshApp: refreshWorkspaceApp,
+            onExportAppPackage: exportWorkspaceAppPackage,
             onRunAppAction: runWorkspaceAppAction,
             onCancelAppStudio: cancelWorkspaceAppStudio,
             onPublishAppDraft: publishWorkspaceAppDraft,
@@ -1802,6 +1804,35 @@ struct ContentView: View {
         openWorkspaceApp(result.app)
     }
 
+    @discardableResult
+    private func exportWorkspaceAppPackage(_ app: WorkspaceApp) throws -> URL {
+        guard let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID }) else {
+            throw WorkspaceAppPackageExportError.missingWorkspacePath
+        }
+        let result = try WorkspaceAppPackageExporter().exportTemplatePackage(app: app, workspace: workspace)
+        AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+            "resource": "workspace_app_package",
+            "result": "exported",
+            "app_id": app.logicalID,
+            "package": result.packageURL.lastPathComponent,
+            "install_state": result.validationReport.installState.rawValue
+        ])
+        return result.packageURL
+    }
+
+    private func exportWorkspaceAppPackageFromSidebar(_ app: WorkspaceApp) {
+        do {
+            _ = try exportWorkspaceAppPackage(app)
+        } catch {
+            AppLogger.audit(.workspaceStoreMigrated, category: "WorkspaceApps", fields: [
+                "resource": "workspace_app_package",
+                "result": "export_failed",
+                "app_id": app.logicalID,
+                "error_type": String(describing: type(of: error))
+            ], level: .error)
+        }
+    }
+
     private func refreshWorkspaceApp(_ app: WorkspaceApp) {
         let workspace = effectiveWorkspace ?? workspaces.first(where: { $0.id == app.workspaceID })
         do {
@@ -2875,6 +2906,7 @@ private struct ContentDetailAreaView: View {
     let onOpenApp: (WorkspaceApp) -> Void
     let onOpenAppStudio: (WorkspaceApp) -> Void
     let onRefreshApp: (WorkspaceApp) -> Void
+    let onExportAppPackage: (WorkspaceApp) throws -> URL
     let onRunAppAction: (WorkspaceAppActionSpec, WorkspaceApp, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
     let onCancelAppStudio: () -> Void
     let onPublishAppDraft: (WorkspaceAppStudioDraft) throws -> Void
@@ -3254,6 +3286,7 @@ private struct ContentDetailAreaView: View {
             onOpenApp: onOpenApp,
             onOpenAppStudio: onOpenAppStudio,
             onRefreshApp: onRefreshApp,
+            onExportAppPackage: onExportAppPackage,
             onRunAppAction: onRunAppAction,
             onCancelAppStudio: onCancelAppStudio,
             onPublishAppDraft: onPublishAppDraft,
@@ -3349,6 +3382,7 @@ private struct ContentDetailContentView: View {
     let onOpenApp: (WorkspaceApp) -> Void
     let onOpenAppStudio: (WorkspaceApp) -> Void
     let onRefreshApp: (WorkspaceApp) -> Void
+    let onExportAppPackage: (WorkspaceApp) throws -> URL
     let onRunAppAction: (WorkspaceAppActionSpec, WorkspaceApp, WorkspaceAppManifest, WorkspaceAppActionInput) throws -> WorkspaceAppActionExecutionResult
     let onCancelAppStudio: () -> Void
     let onPublishAppDraft: (WorkspaceAppStudioDraft) throws -> Void
@@ -3415,6 +3449,7 @@ private struct ContentDetailContentView: View {
                     workspace: effectiveWorkspace,
                     onOpenStudio: { onOpenAppStudio(app) },
                     onRefresh: { onRefreshApp(app) },
+                    onExportPackage: { try onExportAppPackage(app) },
                     onRunAction: { action, manifest, input in
                         try onRunAppAction(action, app, manifest, input)
                     }
