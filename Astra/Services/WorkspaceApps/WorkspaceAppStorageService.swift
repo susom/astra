@@ -77,8 +77,85 @@ enum WorkspaceAppStorageValue: Codable, Sendable, Equatable {
     }
 }
 
+enum WorkspaceAppStorageMigrationRisk: String, Codable, Sendable, Equatable {
+    case additive
+    case reviewRequired
+}
+
+struct WorkspaceAppStorageMigrationStep: Codable, Sendable, Equatable {
+    enum Kind: String, Codable, Sendable, Equatable {
+        case createTable
+        case addColumn
+        case dropTable
+        case dropColumn
+        case changeColumnType
+        case changePrimaryKey
+        case changeRequiredConstraint
+    }
+
+    var kind: Kind
+    var table: String
+    var column: String?
+    var previousValue: String?
+    var nextValue: String?
+    var risk: WorkspaceAppStorageMigrationRisk
+    var summary: String
+}
+
+struct WorkspaceAppStorageMigrationPlan: Codable, Sendable, Equatable {
+    var steps: [WorkspaceAppStorageMigrationStep]
+
+    var requiresReview: Bool {
+        steps.contains { $0.risk == .reviewRequired }
+    }
+
+    var isEmpty: Bool {
+        steps.isEmpty
+    }
+}
+
 struct WorkspaceAppStorageService {
     var fileManager: FileManager = .default
+
+    func planMigration(
+        from current: WorkspaceAppStorageSchema?,
+        to target: WorkspaceAppStorageSchema
+    ) -> WorkspaceAppStorageMigrationPlan {
+        let currentTables = tableMap(current?.tables ?? [])
+        let targetTables = tableMap(target.tables)
+        var steps: [WorkspaceAppStorageMigrationStep] = []
+
+        for table in current?.tables ?? [] where targetTables[table.name] == nil {
+            steps.append(WorkspaceAppStorageMigrationStep(
+                kind: .dropTable,
+                table: table.name,
+                column: nil,
+                previousValue: table.name,
+                nextValue: nil,
+                risk: .reviewRequired,
+                summary: "Drop storage table '\(table.name)'."
+            ))
+        }
+
+        for table in target.tables {
+            guard let currentTable = currentTables[table.name] else {
+                steps.append(WorkspaceAppStorageMigrationStep(
+                    kind: .createTable,
+                    table: table.name,
+                    column: nil,
+                    previousValue: nil,
+                    nextValue: table.name,
+                    risk: .additive,
+                    summary: "Create storage table '\(table.name)'."
+                ))
+                continue
+            }
+
+            steps.append(contentsOf: planColumnMigration(from: currentTable, to: table))
+        }
+
+        return WorkspaceAppStorageMigrationPlan(steps: steps)
+    }
 
     func applySchema(_ schema: WorkspaceAppStorageSchema, databaseURL: URL) throws {
         try fileManager.createDirectory(
@@ -215,6 +292,95 @@ struct WorkspaceAppStorageService {
             }
             return rows
         }
+    }
+
+    private func planColumnMigration(
+        from current: WorkspaceAppStorageTable,
+        to target: WorkspaceAppStorageTable
+    ) -> [WorkspaceAppStorageMigrationStep] {
+        let currentColumns = columnMap(current.columns)
+        let targetColumns = columnMap(target.columns)
+        var steps: [WorkspaceAppStorageMigrationStep] = []
+
+        for column in current.columns where targetColumns[column.name] == nil {
+            steps.append(WorkspaceAppStorageMigrationStep(
+                kind: .dropColumn,
+                table: current.name,
+                column: column.name,
+                previousValue: column.name,
+                nextValue: nil,
+                risk: .reviewRequired,
+                summary: "Drop column '\(column.name)' from storage table '\(current.name)'."
+            ))
+        }
+
+        for column in target.columns {
+            guard let currentColumn = currentColumns[column.name] else {
+                steps.append(WorkspaceAppStorageMigrationStep(
+                    kind: .addColumn,
+                    table: target.name,
+                    column: column.name,
+                    previousValue: nil,
+                    nextValue: column.name,
+                    risk: column.required ? .reviewRequired : .additive,
+                    summary: "Add \(column.required ? "required " : "")column '\(column.name)' to storage table '\(target.name)'."
+                ))
+                continue
+            }
+
+            if currentColumn.type != column.type {
+                steps.append(WorkspaceAppStorageMigrationStep(
+                    kind: .changeColumnType,
+                    table: target.name,
+                    column: column.name,
+                    previousValue: currentColumn.type,
+                    nextValue: column.type,
+                    risk: .reviewRequired,
+                    summary: "Change column '\(column.name)' type from '\(currentColumn.type)' to '\(column.type)' in storage table '\(target.name)'."
+                ))
+            }
+            if currentColumn.primaryKey != column.primaryKey {
+                steps.append(WorkspaceAppStorageMigrationStep(
+                    kind: .changePrimaryKey,
+                    table: target.name,
+                    column: column.name,
+                    previousValue: String(currentColumn.primaryKey),
+                    nextValue: String(column.primaryKey),
+                    risk: .reviewRequired,
+                    summary: "Change primary-key status for column '\(column.name)' in storage table '\(target.name)'."
+                ))
+            }
+            if currentColumn.required != column.required {
+                let risk: WorkspaceAppStorageMigrationRisk = column.required ? .reviewRequired : .additive
+                steps.append(WorkspaceAppStorageMigrationStep(
+                    kind: .changeRequiredConstraint,
+                    table: target.name,
+                    column: column.name,
+                    previousValue: String(currentColumn.required),
+                    nextValue: String(column.required),
+                    risk: risk,
+                    summary: "Change required constraint for column '\(column.name)' in storage table '\(target.name)'."
+                ))
+            }
+        }
+
+        return steps
+    }
+
+    private func tableMap(_ tables: [WorkspaceAppStorageTable]) -> [String: WorkspaceAppStorageTable] {
+        var result: [String: WorkspaceAppStorageTable] = [:]
+        for table in tables {
+            result[table.name] = table
+        }
+        return result
+    }
+
+    private func columnMap(_ columns: [WorkspaceAppStorageColumn]) -> [String: WorkspaceAppStorageColumn] {
+        var result: [String: WorkspaceAppStorageColumn] = [:]
+        for column in columns {
+            result[column.name] = column
+        }
+        return result
     }
 
     private func createTableSQL(for table: WorkspaceAppStorageTable) throws -> String {

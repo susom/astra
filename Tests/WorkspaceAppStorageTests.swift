@@ -109,6 +109,87 @@ struct WorkspaceAppStorageTests {
         #expect(rows[0]["purchased_at"] == .text("2026-06-05"))
     }
 
+    @Test("storage migration planner marks additive schema changes without review")
+    func storageMigrationPlannerMarksAdditiveChangesWithoutReview() {
+        let current = Self.grocerySchema()
+        let target = WorkspaceAppStorageSchema(tables: [
+            WorkspaceAppStorageTable(name: "items", columns: [
+                WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                WorkspaceAppStorageColumn(name: "name", type: "text", required: true),
+                WorkspaceAppStorageColumn(name: "category", type: "text"),
+                WorkspaceAppStorageColumn(name: "quantity", type: "integer"),
+                WorkspaceAppStorageColumn(name: "purchased", type: "bool"),
+                WorkspaceAppStorageColumn(name: "notes", type: "text")
+            ]),
+            WorkspaceAppStorageTable(name: "stores", columns: [
+                WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                WorkspaceAppStorageColumn(name: "name", type: "text", required: true)
+            ])
+        ])
+
+        let plan = WorkspaceAppStorageService().planMigration(from: current, to: target)
+
+        #expect(!plan.requiresReview)
+        #expect(plan.steps == [
+            WorkspaceAppStorageMigrationStep(
+                kind: .addColumn,
+                table: "items",
+                column: "notes",
+                previousValue: nil,
+                nextValue: "notes",
+                risk: .additive,
+                summary: "Add column 'notes' to storage table 'items'."
+            ),
+            WorkspaceAppStorageMigrationStep(
+                kind: .createTable,
+                table: "stores",
+                column: nil,
+                previousValue: nil,
+                nextValue: "stores",
+                risk: .additive,
+                summary: "Create storage table 'stores'."
+            )
+        ])
+    }
+
+    @Test("storage migration planner requires review for destructive schema changes")
+    func storageMigrationPlannerRequiresReviewForDestructiveChanges() {
+        let current = WorkspaceAppStorageSchema(tables: [
+            WorkspaceAppStorageTable(name: "items", columns: [
+                WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                WorkspaceAppStorageColumn(name: "name", type: "text"),
+                WorkspaceAppStorageColumn(name: "category", type: "text"),
+                WorkspaceAppStorageColumn(name: "quantity", type: "integer")
+            ]),
+            WorkspaceAppStorageTable(name: "stores", columns: [
+                WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true)
+            ])
+        ])
+        let target = WorkspaceAppStorageSchema(tables: [
+            WorkspaceAppStorageTable(name: "items", columns: [
+                WorkspaceAppStorageColumn(name: "id", type: "text", primaryKey: false, required: true),
+                WorkspaceAppStorageColumn(name: "name", type: "text", required: true),
+                WorkspaceAppStorageColumn(name: "purchased_at", type: "date", required: true)
+            ])
+        ])
+
+        let plan = WorkspaceAppStorageService().planMigration(from: current, to: target)
+
+        #expect(plan.requiresReview)
+        #expect(plan.steps.map(\.kind) == [
+            .dropTable,
+            .dropColumn,
+            .dropColumn,
+            .changeColumnType,
+            .changePrimaryKey,
+            .changeRequiredConstraint,
+            .addColumn
+        ])
+        #expect(plan.steps.allSatisfy { $0.risk == .reviewRequired })
+        #expect(plan.steps[0].summary == "Drop storage table 'stores'.")
+        #expect(plan.steps.last?.summary == "Add required column 'purchased_at' to storage table 'items'.")
+    }
+
     @Test("storage updates and deletes records by primary key")
     func storageUpdatesAndDeletesRecordsByPrimaryKey() throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
