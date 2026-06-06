@@ -24,6 +24,120 @@ struct WorkspaceAppStudioDraft: Identifiable, Sendable, Equatable {
     }
 }
 
+struct WorkspaceAppStudioManifestPatchOperation: Codable, Sendable, Equatable {
+    var op: String
+    var path: String
+    var value: WorkspaceAppStudioPatchValue?
+
+    enum CodingKeys: String, CodingKey {
+        case op
+        case path
+        case value
+    }
+
+    init(op: String, path: String, value: WorkspaceAppStudioPatchValue? = nil) {
+        self.op = op
+        self.path = path
+        self.value = value
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        op = try container.decode(String.self, forKey: .op)
+        path = try container.decode(String.self, forKey: .path)
+        guard container.contains(.value) else {
+            value = nil
+            return
+        }
+
+        let parts = path.split(separator: "/").map(String.init)
+        if parts == ["app", "name"] || parts == ["app", "description"] || parts == ["app", "icon"] {
+            value = .string(try container.decode(String.self, forKey: .value))
+        } else if parts == ["app", "tags"] || parts == ["app", "archetypes"] {
+            value = .stringArray(try container.decode([String].self, forKey: .value))
+        } else if parts == ["permissions"] {
+            value = .permissions(try container.decode(WorkspaceAppPermissions.self, forKey: .value))
+        } else if parts.count == 3 && parts[0] == "storage" && parts[1] == "tables" {
+            value = .storageTable(try container.decode(WorkspaceAppStorageTable.self, forKey: .value))
+        } else if parts.count == 2 && parts[0] == "views" {
+            value = .view(try container.decode(WorkspaceAppViewSpec.self, forKey: .value))
+        } else if parts.count == 2 && parts[0] == "actions" {
+            value = .action(try container.decode(WorkspaceAppActionSpec.self, forKey: .value))
+        } else if parts.count == 2 && parts[0] == "automations" {
+            value = .automation(try container.decode(WorkspaceAppAutomationSpec.self, forKey: .value))
+        } else {
+            value = try container.decode(WorkspaceAppStudioPatchValue.self, forKey: .value)
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(op, forKey: .op)
+        try container.encode(path, forKey: .path)
+        try container.encodeIfPresent(value, forKey: .value)
+    }
+}
+
+enum WorkspaceAppStudioPatchValue: Codable, Sendable, Equatable {
+    case string(String)
+    case stringArray([String])
+    case storageTable(WorkspaceAppStorageTable)
+    case view(WorkspaceAppViewSpec)
+    case action(WorkspaceAppActionSpec)
+    case automation(WorkspaceAppAutomationSpec)
+    case permissions(WorkspaceAppPermissions)
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([String].self) {
+            self = .stringArray(value)
+        } else if let value = try? container.decode(WorkspaceAppStorageTable.self), !value.name.isEmpty {
+            self = .storageTable(value)
+        } else if let value = try? container.decode(WorkspaceAppViewSpec.self) {
+            self = .view(value)
+        } else if let value = try? container.decode(WorkspaceAppActionSpec.self) {
+            self = .action(value)
+        } else if let value = try? container.decode(WorkspaceAppAutomationSpec.self) {
+            self = .automation(value)
+        } else {
+            self = .permissions(try container.decode(WorkspaceAppPermissions.self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value):
+            try container.encode(value)
+        case .stringArray(let value):
+            try container.encode(value)
+        case .storageTable(let value):
+            try container.encode(value)
+        case .view(let value):
+            try container.encode(value)
+        case .action(let value):
+            try container.encode(value)
+        case .automation(let value):
+            try container.encode(value)
+        case .permissions(let value):
+            try container.encode(value)
+        }
+    }
+}
+
+struct WorkspaceAppStudioPatchResult: Sendable, Equatable {
+    var manifest: WorkspaceAppManifest
+    var rejectedManifest: WorkspaceAppManifest?
+    var validationReport: WorkspaceAppManifestValidationReport
+    var accepted: Bool
+
+    var canPublish: Bool {
+        accepted && validationReport.isValid
+    }
+}
+
 enum WorkspaceAppStudioBuilder {
     static let defaultIntent = "Build me a database app to store my groceries."
 
@@ -93,6 +207,59 @@ enum WorkspaceAppStudioBuilder {
         return copy
     }
 
+    static func applyPatch(
+        _ operations: [WorkspaceAppStudioManifestPatchOperation],
+        to manifest: WorkspaceAppManifest
+    ) -> WorkspaceAppStudioPatchResult {
+        do {
+            var patched = manifest
+            for operation in operations {
+                try apply(operation, to: &patched)
+            }
+            let report = WorkspaceAppManifestValidator.validate(patched)
+            guard report.isValid else {
+                return WorkspaceAppStudioPatchResult(
+                    manifest: manifest,
+                    rejectedManifest: patched,
+                    validationReport: report,
+                    accepted: false
+                )
+            }
+            return WorkspaceAppStudioPatchResult(
+                manifest: patched,
+                rejectedManifest: nil,
+                validationReport: report,
+                accepted: true
+            )
+        } catch let error as WorkspaceAppStudioPatchError {
+            return WorkspaceAppStudioPatchResult(
+                manifest: manifest,
+                rejectedManifest: nil,
+                validationReport: WorkspaceAppManifestValidationReport(issues: [
+                    WorkspaceAppManifestValidationReport.Issue(
+                        severity: .blocker,
+                        path: error.path,
+                        message: error.message
+                    )
+                ]),
+                accepted: false
+            )
+        } catch {
+            return WorkspaceAppStudioPatchResult(
+                manifest: manifest,
+                rejectedManifest: nil,
+                validationReport: WorkspaceAppManifestValidationReport(issues: [
+                    WorkspaceAppManifestValidationReport.Issue(
+                        severity: .blocker,
+                        path: "/patch",
+                        message: "Could not apply manifest patch: \(error.localizedDescription)"
+                    )
+                ]),
+                accepted: false
+            )
+        }
+    }
+
     private static func manifest(for intent: String) -> WorkspaceAppManifest {
         if isLocalDatabaseIntent(intent) {
             return localDatabaseManifest(intent: intent)
@@ -111,6 +278,167 @@ enum WorkspaceAppStudioBuilder {
             return reportGeneratorManifest(for: idea)
         }
         return operationalSurfaceManifest(intent: idea.name)
+    }
+
+    private static func apply(
+        _ operation: WorkspaceAppStudioManifestPatchOperation,
+        to manifest: inout WorkspaceAppManifest
+    ) throws {
+        let parts = operation.path.split(separator: "/").map(String.init)
+        switch operation.op {
+        case "add":
+            try add(operation.value, at: parts, path: operation.path, manifest: &manifest)
+        case "replace":
+            try replace(operation.value, at: parts, path: operation.path, manifest: &manifest)
+        case "remove":
+            try remove(at: parts, path: operation.path, manifest: &manifest)
+        default:
+            throw WorkspaceAppStudioPatchError(path: operation.path, message: "Unsupported patch operation '\(operation.op)'.")
+        }
+    }
+
+    private static func add(
+        _ value: WorkspaceAppStudioPatchValue?,
+        at parts: [String],
+        path: String,
+        manifest: inout WorkspaceAppManifest
+    ) throws {
+        if parts == ["storage", "tables", "-"] {
+            let table = try storageTableValue(value, path: path)
+            if manifest.storage == nil {
+                manifest.storage = WorkspaceAppStorageSchema()
+            }
+            manifest.storage?.tables.append(table)
+        } else if parts == ["views", "-"] {
+            manifest.views.append(try viewValue(value, path: path))
+        } else if parts == ["actions", "-"] {
+            manifest.actions.append(try actionValue(value, path: path))
+        } else if parts == ["automations", "-"] {
+            manifest.automations.append(try automationValue(value, path: path))
+        } else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Unsupported add patch path.")
+        }
+    }
+
+    private static func replace(
+        _ value: WorkspaceAppStudioPatchValue?,
+        at parts: [String],
+        path: String,
+        manifest: inout WorkspaceAppManifest
+    ) throws {
+        if parts == ["app", "name"] {
+            manifest.app.name = try stringValue(value, path: path)
+        } else if parts == ["app", "description"] {
+            manifest.app.description = try stringValue(value, path: path)
+        } else if parts == ["app", "icon"] {
+            manifest.app.icon = try stringValue(value, path: path)
+        } else if parts == ["app", "tags"] {
+            manifest.app.tags = try stringArrayValue(value, path: path)
+        } else if parts == ["app", "archetypes"] {
+            manifest.app.archetypes = try stringArrayValue(value, path: path)
+        } else if parts == ["permissions"] {
+            manifest.permissions = try permissionsValue(value, path: path)
+        } else if parts.count == 3 && parts[0] == "storage" && parts[1] == "tables" {
+            guard manifest.storage != nil else {
+                throw WorkspaceAppStudioPatchError(path: path, message: "Cannot replace a storage table when the manifest has no storage schema.")
+            }
+            let index = parts[2]
+            let resolved = try existingIndex(index, count: manifest.storage?.tables.count ?? 0, path: path)
+            manifest.storage?.tables[resolved] = try storageTableValue(value, path: path)
+        } else if parts.count == 2 && parts[0] == "views" {
+            let index = parts[1]
+            manifest.views[try existingIndex(index, count: manifest.views.count, path: path)] = try viewValue(value, path: path)
+        } else if parts.count == 2 && parts[0] == "actions" {
+            let index = parts[1]
+            manifest.actions[try existingIndex(index, count: manifest.actions.count, path: path)] = try actionValue(value, path: path)
+        } else if parts.count == 2 && parts[0] == "automations" {
+            let index = parts[1]
+            manifest.automations[try existingIndex(index, count: manifest.automations.count, path: path)] = try automationValue(value, path: path)
+        } else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Unsupported replace patch path.")
+        }
+    }
+
+    private static func remove(
+        at parts: [String],
+        path: String,
+        manifest: inout WorkspaceAppManifest
+    ) throws {
+        if parts.count == 3 && parts[0] == "storage" && parts[1] == "tables" {
+            guard var storage = manifest.storage else {
+                throw WorkspaceAppStudioPatchError(path: path, message: "Cannot remove a storage table when the manifest has no storage schema.")
+            }
+            let index = parts[2]
+            storage.tables.remove(at: try existingIndex(index, count: storage.tables.count, path: path))
+            manifest.storage = storage
+        } else if parts.count == 2 && parts[0] == "views" {
+            let index = parts[1]
+            manifest.views.remove(at: try existingIndex(index, count: manifest.views.count, path: path))
+        } else if parts.count == 2 && parts[0] == "actions" {
+            let index = parts[1]
+            manifest.actions.remove(at: try existingIndex(index, count: manifest.actions.count, path: path))
+        } else if parts.count == 2 && parts[0] == "automations" {
+            let index = parts[1]
+            manifest.automations.remove(at: try existingIndex(index, count: manifest.automations.count, path: path))
+        } else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Unsupported remove patch path.")
+        }
+    }
+
+    private static func stringValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> String {
+        guard case .string(let string) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be a string.")
+        }
+        return string
+    }
+
+    private static func stringArrayValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> [String] {
+        guard case .stringArray(let strings) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be a string array.")
+        }
+        return strings
+    }
+
+    private static func storageTableValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> WorkspaceAppStorageTable {
+        guard case .storageTable(let table) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be a storage table.")
+        }
+        return table
+    }
+
+    private static func viewValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> WorkspaceAppViewSpec {
+        guard case .view(let view) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be a view.")
+        }
+        return view
+    }
+
+    private static func actionValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> WorkspaceAppActionSpec {
+        guard case .action(let action) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be an action.")
+        }
+        return action
+    }
+
+    private static func automationValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> WorkspaceAppAutomationSpec {
+        guard case .automation(let automation) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be an automation.")
+        }
+        return automation
+    }
+
+    private static func permissionsValue(_ value: WorkspaceAppStudioPatchValue?, path: String) throws -> WorkspaceAppPermissions {
+        guard case .permissions(let permissions) = value else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch value must be app permissions.")
+        }
+        return permissions
+    }
+
+    private static func existingIndex(_ rawValue: String, count: Int, path: String) throws -> Int {
+        guard let index = Int(rawValue), index >= 0, index < count else {
+            throw WorkspaceAppStudioPatchError(path: path, message: "Patch index is outside the current manifest collection.")
+        }
+        return index
     }
 
     private static func proposal(
@@ -565,4 +893,9 @@ enum WorkspaceAppStudioBuilder {
         let slug = parts.joined(separator: "-")
         return slug.isEmpty ? "workspace-app" : slug
     }
+}
+
+private struct WorkspaceAppStudioPatchError: Error, Equatable {
+    var path: String
+    var message: String
 }

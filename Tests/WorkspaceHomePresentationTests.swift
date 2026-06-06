@@ -595,6 +595,90 @@ struct WorkspaceHomePresentationTests {
         #expect(manifest.app.name == "Grocery Tracker 3")
     }
 
+    @Test("App Studio applies validated manifest patches from structured output")
+    func appStudioAppliesValidatedManifestPatches() throws {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+        let patchJSON = """
+        [
+          {"op": "replace", "path": "/app/name", "value": "Household Grocery Tracker"},
+          {
+            "op": "add",
+            "path": "/actions/-",
+            "value": {
+              "id": "create_weekly_plan",
+              "type": "task.createDraft",
+              "label": "Create Weekly Plan",
+              "taskGoal": "Draft a weekly grocery plan from current app storage."
+            }
+          }
+        ]
+        """
+        let operations = try JSONDecoder().decode(
+            [WorkspaceAppStudioManifestPatchOperation].self,
+            from: Data(patchJSON.utf8)
+        )
+
+        let result = WorkspaceAppStudioBuilder.applyPatch(operations, to: draft.manifest)
+
+        #expect(result.accepted)
+        #expect(result.canPublish)
+        #expect(result.rejectedManifest == nil)
+        #expect(result.manifest.app.name == "Household Grocery Tracker")
+        #expect(result.manifest.actions.last?.id == "create_weekly_plan")
+        #expect(result.manifest.actions.last?.type == "task.createDraft")
+        #expect(draft.manifest.app.name == "Grocery Tracker")
+    }
+
+    @Test("App Studio patch validation preserves last valid manifest")
+    func appStudioPatchValidationPreservesLastValidManifest() {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+        let operations = [
+            WorkspaceAppStudioManifestPatchOperation(op: "remove", path: "/storage/tables/0")
+        ]
+
+        let result = WorkspaceAppStudioBuilder.applyPatch(operations, to: draft.manifest)
+
+        #expect(!result.accepted)
+        #expect(!result.canPublish)
+        #expect(result.manifest == draft.manifest)
+        #expect(result.rejectedManifest?.storage?.tables.map(\.name) == ["shopping_lists", "purchases"])
+        #expect(result.validationReport.blockers.contains {
+            $0.path.contains("/views") && $0.message.contains("unknown storage table 'items'")
+        })
+    }
+
+    @Test("App Studio patch validation reports unsupported paths")
+    func appStudioPatchValidationReportsUnsupportedPaths() {
+        let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
+        let draft = WorkspaceAppStudioBuilder.draft(
+            intent: "Build me a database app to store my groceries.",
+            workspace: workspace
+        )
+
+        let result = WorkspaceAppStudioBuilder.applyPatch(
+            [WorkspaceAppStudioManifestPatchOperation(op: "replace", path: "/requirements/0/contract", value: .string("x"))],
+            to: draft.manifest
+        )
+
+        #expect(!result.accepted)
+        #expect(result.manifest == draft.manifest)
+        #expect(result.validationReport.blockers == [
+            WorkspaceAppManifestValidationReport.Issue(
+                severity: .blocker,
+                path: "/requirements/0/contract",
+                message: "Unsupported replace patch path."
+            )
+        ])
+    }
+
     @Test("App Studio ideates reconciliation apps from BigQuery and REDCap context")
     func appStudioIdeatesReconciliationAppsFromContext() {
         let ideas = WorkspaceAppStudioIdeator.proposals(
