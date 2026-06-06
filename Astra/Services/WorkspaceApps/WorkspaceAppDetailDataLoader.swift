@@ -21,6 +21,19 @@ struct WorkspaceAppAutomationStateSnapshot: Equatable {
     var nextRunAt: Date?
 }
 
+struct WorkspaceAppRunSnapshot: Equatable {
+    var id: UUID
+    var actionID: String
+    var trigger: WorkspaceAppRunTrigger
+    var status: WorkspaceAppRunStatus
+    var startedAt: Date
+    var completedAt: Date?
+    var outputSummary: String
+    var errorMessage: String?
+    var linkedTaskID: UUID?
+    var linkedArtifactPath: String?
+}
+
 struct WorkspaceAppStorageTableSnapshot: Equatable {
     var name: String
     var columns: [String]
@@ -37,6 +50,7 @@ struct WorkspaceAppDetailDataSnapshot: Equatable {
     var storageTables: [WorkspaceAppStorageTableSnapshot]
     var dependencyBindings: [WorkspaceAppDependencyBindingSnapshot]
     var automationStates: [WorkspaceAppAutomationStateSnapshot]
+    var runs: [WorkspaceAppRunSnapshot]
     var errorMessage: String?
 
     static let empty = WorkspaceAppDetailDataSnapshot(
@@ -44,6 +58,7 @@ struct WorkspaceAppDetailDataSnapshot: Equatable {
         storageTables: [],
         dependencyBindings: [],
         automationStates: [],
+        runs: [],
         errorMessage: nil
     )
 }
@@ -56,7 +71,8 @@ struct WorkspaceAppDetailDataLoader {
         app: WorkspaceApp,
         workspace: Workspace?,
         dependencyBindings: [WorkspaceAppDependencyBinding] = [],
-        automationStates: [WorkspaceAppAutomationState] = []
+        automationStates: [WorkspaceAppAutomationState] = [],
+        runs: [WorkspaceAppRun] = []
     ) -> WorkspaceAppDetailDataSnapshot {
         guard let workspace, !workspace.primaryPath.isEmpty else {
             return WorkspaceAppDetailDataSnapshot(
@@ -64,6 +80,7 @@ struct WorkspaceAppDetailDataLoader {
                 storageTables: [],
                 dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
                 automationStates: automationSnapshots(automationStates, appID: app.id),
+                runs: runSnapshots(runs, appID: app.id),
                 errorMessage: "Workspace path is unavailable."
             )
         }
@@ -88,6 +105,7 @@ struct WorkspaceAppDetailDataLoader {
                 storageTables: tables,
                 dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
                 automationStates: automationSnapshots(automationStates, appID: app.id),
+                runs: runSnapshots(runs, appID: app.id),
                 errorMessage: nil
             )
         } catch {
@@ -96,6 +114,7 @@ struct WorkspaceAppDetailDataLoader {
                 storageTables: [],
                 dependencyBindings: bindingSnapshots(dependencyBindings, appID: app.id),
                 automationStates: automationSnapshots(automationStates, appID: app.id),
+                runs: runSnapshots(runs, appID: app.id),
                 errorMessage: "Could not load app manifest."
             )
         }
@@ -138,6 +157,35 @@ struct WorkspaceAppDetailDataLoader {
                     status: automation.status,
                     lastRunAt: automation.lastRunAt,
                     nextRunAt: automation.nextRunAt
+                )
+            }
+    }
+
+    private func runSnapshots(
+        _ runs: [WorkspaceAppRun],
+        appID: UUID
+    ) -> [WorkspaceAppRunSnapshot] {
+        runs
+            .filter { $0.appID == appID }
+            .sorted { lhs, rhs in
+                if lhs.startedAt != rhs.startedAt {
+                    return lhs.startedAt > rhs.startedAt
+                }
+                return lhs.actionID < rhs.actionID
+            }
+            .prefix(8)
+            .map { run in
+                WorkspaceAppRunSnapshot(
+                    id: run.id,
+                    actionID: run.actionID,
+                    trigger: run.trigger,
+                    status: run.status,
+                    startedAt: run.startedAt,
+                    completedAt: run.completedAt,
+                    outputSummary: run.outputSummary,
+                    errorMessage: run.errorMessage,
+                    linkedTaskID: run.linkedTaskID,
+                    linkedArtifactPath: run.linkedArtifactPath
                 )
             }
     }

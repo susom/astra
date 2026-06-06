@@ -11,6 +11,7 @@ struct WorkspaceAppDetailView: View {
 
     @Query(sort: \WorkspaceAppDependencyBinding.requirementID) private var dependencyBindings: [WorkspaceAppDependencyBinding]
     @Query(sort: \WorkspaceAppAutomationState.automationID) private var automationStates: [WorkspaceAppAutomationState]
+    @Query(sort: \WorkspaceAppRun.startedAt, order: .reverse) private var appRuns: [WorkspaceAppRun]
     @State private var dataSnapshot = WorkspaceAppDetailDataSnapshot.empty
     @State private var actionStatusMessage = ""
     @State private var packageStatusMessage = ""
@@ -36,6 +37,7 @@ struct WorkspaceAppDetailView: View {
                     automationSection
                     nativeSurfaceSection
                     actionsSection
+                    runHistorySection
                     storageSection
                     metadataRows
                 }
@@ -317,6 +319,32 @@ struct WorkspaceAppDetailView: View {
     }
 
     @ViewBuilder
+    private var runHistorySection: some View {
+        let history = WorkspaceAppRunHistoryPresentationBuilder.presentation(runs: dataSnapshot.runs)
+        if !history.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Run History")
+                        .font(Stanford.ui(15, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    Text("\(history.rows.count)")
+                        .font(Stanford.caption(11).weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(history.rows) { row in
+                        WorkspaceAppRunHistoryRow(row: row)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
     private var storageSection: some View {
         if let errorMessage = dataSnapshot.errorMessage {
             WorkspaceAppDetailNotice(
@@ -359,7 +387,8 @@ struct WorkspaceAppDetailView: View {
             app: app,
             workspace: workspace,
             dependencyBindings: dependencyBindings,
-            automationStates: automationStates
+            automationStates: automationStates,
+            runs: appRuns
         )
     }
 
@@ -565,6 +594,77 @@ private struct WorkspaceAppChartCard: View {
             RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
+    }
+}
+
+private struct WorkspaceAppRunHistoryRow: View {
+    let row: WorkspaceAppRunHistoryRowPresentation
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: row.statusSystemImage)
+                .font(Stanford.caption(12).weight(.semibold))
+                .foregroundStyle(statusColor)
+                .frame(width: 18, height: 18)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(row.actionID)
+                        .font(Stanford.ui(13, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(row.statusLabel)
+                        .font(Stanford.caption(11).weight(.medium))
+                        .foregroundStyle(statusColor)
+                        .lineLimit(1)
+
+                    Text(row.triggerLabel)
+                        .font(Stanford.caption(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 8)
+
+                    Text(row.timeLabel)
+                        .font(Stanford.caption(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Text(row.summary)
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+
+                if let linkedLabel = row.linkedLabel {
+                    Label(linkedLabel, systemImage: "link")
+                        .font(Stanford.caption(11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(12)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var statusColor: Color {
+        switch row.statusLabel {
+        case "Completed":
+            Stanford.paloAltoGreen.opacity(0.92)
+        case "Failed":
+            Stanford.cardinalRed.opacity(0.92)
+        case "Blocked":
+            Stanford.poppy.opacity(0.92)
+        default:
+            .secondary
+        }
     }
 }
 

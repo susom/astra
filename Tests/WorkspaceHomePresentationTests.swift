@@ -552,6 +552,57 @@ struct WorkspaceHomePresentationTests {
         #expect(chart.bars[1].fraction > 0)
     }
 
+    @Test("Workspace app run history presentation formats recent app runs")
+    func workspaceAppRunHistoryPresentationFormatsRecentRuns() {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let taskID = UUID()
+        let artifactPath = "/tmp/workspace/.astra/apps/recon/exports/missing.csv"
+        let rows = [
+            WorkspaceAppRunSnapshot(
+                id: UUID(),
+                actionID: "refresh",
+                trigger: .automation,
+                status: .completed,
+                startedAt: Date(timeIntervalSince1970: 940),
+                completedAt: Date(timeIntervalSince1970: 945),
+                outputSummary: "Refreshed 12 rows.",
+                errorMessage: nil,
+                linkedTaskID: nil,
+                linkedArtifactPath: artifactPath
+            ),
+            WorkspaceAppRunSnapshot(
+                id: UUID(),
+                actionID: "submit",
+                trigger: .user,
+                status: .blocked,
+                startedAt: Date(timeIntervalSince1970: 820),
+                completedAt: Date(timeIntervalSince1970: 830),
+                outputSummary: "",
+                errorMessage: "Approval required.",
+                linkedTaskID: taskID,
+                linkedArtifactPath: nil
+            )
+        ]
+
+        let history = WorkspaceAppRunHistoryPresentationBuilder.presentation(
+            runs: rows,
+            now: now
+        )
+
+        #expect(history.rows.count == 2)
+        #expect(history.rows[0].actionID == "refresh")
+        #expect(history.rows[0].statusLabel == "Completed")
+        #expect(history.rows[0].statusSystemImage == "checkmark.circle")
+        #expect(history.rows[0].triggerLabel == "Automation")
+        #expect(history.rows[0].timeLabel == "1m ago")
+        #expect(history.rows[0].summary == "Refreshed 12 rows.")
+        #expect(history.rows[0].linkedLabel == "missing.csv")
+        #expect(history.rows[1].statusLabel == "Blocked")
+        #expect(history.rows[1].triggerLabel == "Manual")
+        #expect(history.rows[1].summary == "Approval required.")
+        #expect(history.rows[1].linkedLabel == "Linked task")
+    }
+
     @Test("App Studio turns a local database intent into a valid publishable draft")
     func appStudioBuildsValidLocalDatabaseDraft() {
         let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")

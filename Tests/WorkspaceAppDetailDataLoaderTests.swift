@@ -223,6 +223,77 @@ struct WorkspaceAppDetailDataLoaderTests {
         ])
     }
 
+    @Test("loader includes recent app run history for the selected app")
+    func loaderIncludesRecentAppRunHistoryForSelectedApp() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-detail-runs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let workspace = Workspace(name: "Runs", primaryPath: root.path)
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "run-app", name: "Run App")
+        )
+        let manifestURL = URL(fileURLWithPath: WorkspaceFileLayout.appManifestFile(
+            workspacePath: workspace.primaryPath,
+            appID: manifest.app.id
+        ))
+        try FileManager.default.createDirectory(at: manifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try WorkspaceAppService.encodeManifest(manifest).write(to: manifestURL)
+
+        let app = WorkspaceApp(
+            workspaceID: workspace.id,
+            logicalID: manifest.app.id,
+            name: manifest.app.name,
+            manifestRelativePath: WorkspaceFileLayout.relativeAppManifestFile(appID: manifest.app.id),
+            appDirectoryRelativePath: WorkspaceFileLayout.relativeAppDirectory(appID: manifest.app.id),
+            manifestDigest: "digest"
+        )
+        let otherAppID = UUID()
+        let oldRun = WorkspaceAppRun(
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: app.logicalID,
+            actionID: "old",
+            trigger: .automation,
+            status: .completed,
+            startedAt: Date(timeIntervalSince1970: 100),
+            outputSummary: "Old summary"
+        )
+        let newRun = WorkspaceAppRun(
+            workspaceID: workspace.id,
+            appID: app.id,
+            appLogicalID: app.logicalID,
+            actionID: "new",
+            trigger: .user,
+            status: .blocked,
+            startedAt: Date(timeIntervalSince1970: 200),
+            outputSummary: "",
+            errorMessage: "Needs approval"
+        )
+        let otherRun = WorkspaceAppRun(
+            workspaceID: workspace.id,
+            appID: otherAppID,
+            appLogicalID: "other",
+            actionID: "other",
+            startedAt: Date(timeIntervalSince1970: 300),
+            outputSummary: "Other summary"
+        )
+
+        let snapshot = WorkspaceAppDetailDataLoader().load(
+            app: app,
+            workspace: workspace,
+            runs: [oldRun, otherRun, newRun]
+        )
+
+        #expect(snapshot.errorMessage == nil)
+        #expect(snapshot.runs.map(\.actionID) == ["new", "old"])
+        #expect(snapshot.runs[0].status == .blocked)
+        #expect(snapshot.runs[0].errorMessage == "Needs approval")
+        #expect(snapshot.runs[1].trigger == .automation)
+        #expect(snapshot.runs[1].outputSummary == "Old summary")
+    }
+
     @Test("loader returns a visible error when manifest is unavailable")
     func loaderReturnsVisibleErrorWhenManifestUnavailable() {
         let workspace = Workspace(name: "Missing", primaryPath: "/tmp/missing-\(UUID().uuidString)")

@@ -77,6 +77,25 @@ struct WorkspaceAppNativeSurfacePresentation: Equatable {
     }
 }
 
+struct WorkspaceAppRunHistoryPresentation: Equatable {
+    var rows: [WorkspaceAppRunHistoryRowPresentation]
+
+    var isEmpty: Bool {
+        rows.isEmpty
+    }
+}
+
+struct WorkspaceAppRunHistoryRowPresentation: Identifiable, Equatable {
+    var id: UUID
+    var actionID: String
+    var statusLabel: String
+    var statusSystemImage: String
+    var triggerLabel: String
+    var timeLabel: String
+    var summary: String
+    var linkedLabel: String?
+}
+
 struct WorkspaceAppMetricPresentation: Identifiable, Equatable {
     var id: String
     var label: String
@@ -434,6 +453,90 @@ enum WorkspaceAppManifestInspectorPresentationBuilder {
             return trimmed.isEmpty ? nil : trimmed
         }
         return values.isEmpty ? "None" : values.joined(separator: ", ")
+    }
+}
+
+enum WorkspaceAppRunHistoryPresentationBuilder {
+    static func presentation(
+        runs: [WorkspaceAppRunSnapshot],
+        now: Date = Date()
+    ) -> WorkspaceAppRunHistoryPresentation {
+        WorkspaceAppRunHistoryPresentation(
+            rows: runs.map { run in
+                WorkspaceAppRunHistoryRowPresentation(
+                    id: run.id,
+                    actionID: run.actionID,
+                    statusLabel: statusLabel(run.status),
+                    statusSystemImage: statusSystemImage(run.status),
+                    triggerLabel: triggerLabel(run.trigger),
+                    timeLabel: relativeTime(from: run.startedAt, now: now),
+                    summary: summary(for: run),
+                    linkedLabel: linkedLabel(for: run)
+                )
+            }
+        )
+    }
+
+    private static func statusLabel(_ status: WorkspaceAppRunStatus) -> String {
+        switch status {
+        case .running: "Running"
+        case .completed: "Completed"
+        case .failed: "Failed"
+        case .blocked: "Blocked"
+        case .cancelled: "Cancelled"
+        }
+    }
+
+    private static func statusSystemImage(_ status: WorkspaceAppRunStatus) -> String {
+        switch status {
+        case .running: "arrow.triangle.2.circlepath"
+        case .completed: "checkmark.circle"
+        case .failed: "xmark.octagon"
+        case .blocked: "hand.raised"
+        case .cancelled: "minus.circle"
+        }
+    }
+
+    private static func triggerLabel(_ trigger: WorkspaceAppRunTrigger) -> String {
+        switch trigger {
+        case .user: "Manual"
+        case .automation: "Automation"
+        case .importReview: "Import review"
+        case .test: "Test"
+        }
+    }
+
+    private static func summary(for run: WorkspaceAppRunSnapshot) -> String {
+        let candidates = [run.outputSummary, run.errorMessage ?? ""]
+        for candidate in candidates {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        }
+        return "No output summary yet."
+    }
+
+    private static func linkedLabel(for run: WorkspaceAppRunSnapshot) -> String? {
+        if run.linkedTaskID != nil {
+            return "Linked task"
+        }
+        if let artifact = run.linkedArtifactPath,
+           !artifact.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: artifact).lastPathComponent
+        }
+        return nil
+    }
+
+    private static func relativeTime(from date: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(date)))
+        if seconds < 60 { return "Just now" }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes)m ago" }
+        let hours = minutes / 60
+        if hours < 24 { return "\(hours)h ago" }
+        let days = hours / 24
+        return "\(days)d ago"
     }
 }
 
