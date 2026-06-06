@@ -6,6 +6,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case unsupportedActionType(String)
     case missingTable
     case missingRecord
+    case missingPrimaryKey(String)
     case missingTaskGoal
     case unsupportedExportFormat(String)
     case permissionDenied(String)
@@ -21,6 +22,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app storage action requires a table."
         case .missingRecord:
             "Workspace app storage write action requires a record."
+        case .missingPrimaryKey(let table):
+            "Workspace app storage table '\(table)' must declare a primary key for this action."
         case .missingTaskGoal:
             "Workspace app task action requires a task goal."
         case .unsupportedExportFormat(let format):
@@ -40,6 +43,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
     var exportFormat: String?
     var taskTitle: String?
     var taskGoal: String?
+    var confirmedDestructive: Bool
 
     init(
         table: String? = nil,
@@ -47,7 +51,8 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         limit: Int = 100,
         exportFormat: String? = nil,
         taskTitle: String? = nil,
-        taskGoal: String? = nil
+        taskGoal: String? = nil,
+        confirmedDestructive: Bool = false
     ) {
         self.table = table
         self.record = record
@@ -55,6 +60,7 @@ struct WorkspaceAppActionInput: Codable, Sendable, Equatable {
         self.exportFormat = exportFormat
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
+        self.confirmedDestructive = confirmedDestructive
     }
 }
 
@@ -174,7 +180,7 @@ struct WorkspaceAppActionExecutor {
 
         do {
             let action = try actionSpec(actionID: actionID, manifest: manifest)
-            try enforcePermission(for: action, app: app)
+            try enforcePermission(for: action, app: app, input: input)
             let result = try execute(
                 action: action,
                 app: app,
@@ -229,7 +235,11 @@ struct WorkspaceAppActionExecutor {
         return action
     }
 
-    private func enforcePermission(for action: WorkspaceAppActionSpec, app: WorkspaceApp) throws {
+    private func enforcePermission(
+        for action: WorkspaceAppActionSpec,
+        app: WorkspaceApp,
+        input: WorkspaceAppActionInput
+    ) throws {
         switch effect(for: action.type) {
         case .read:
             return
@@ -246,9 +256,16 @@ struct WorkspaceAppActionExecutor {
                 )
             }
         case .destructive:
-            throw WorkspaceAppActionExecutionError.permissionDenied(
-                "Destructive action '\(action.id)' requires explicit confirmation before execution."
-            )
+            guard app.permissionMode != .readOnly else {
+                throw WorkspaceAppActionExecutionError.permissionDenied(
+                    "Read-only workspace apps cannot perform destructive action '\(action.id)'."
+                )
+            }
+            guard input.confirmedDestructive else {
+                throw WorkspaceAppActionExecutionError.permissionDenied(
+                    "Destructive action '\(action.id)' requires explicit confirmation before execution."
+                )
+            }
         }
     }
 
@@ -279,6 +296,41 @@ struct WorkspaceAppActionExecutor {
                 throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
             }
             return ([], "Inserted 1 record into \(table).", nil, nil)
+        case "appStorage.update":
+            guard let table = input.table ?? action.table else { throw WorkspaceAppActionExecutionError.missingTable }
+            guard !input.record.isEmpty else { throw WorkspaceAppActionExecutionError.missingRecord }
+            let primaryKey = try primaryKeyColumn(in: table, manifest: manifest)
+            do {
+                try storageService.updateRecord(
+                    input.record,
+                    in: table,
+                    primaryKey: primaryKey,
+                    databaseURL: databaseURL
+                )
+            } catch {
+                throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
+            }
+            return ([], "Updated 1 record in \(table).", nil, nil)
+        case "appStorage.delete":
+            guard let table = input.table ?? action.table else { throw WorkspaceAppActionExecutionError.missingTable }
+            guard !input.record.isEmpty else { throw WorkspaceAppActionExecutionError.missingRecord }
+            let primaryKey = try primaryKeyColumn(in: table, manifest: manifest)
+            guard let primaryKeyValue = input.record[primaryKey] else {
+                throw WorkspaceAppActionExecutionError.storageFailed(
+                    String(describing: WorkspaceAppStorageError.missingPrimaryKeyValue(primaryKey))
+                )
+            }
+            do {
+                try storageService.deleteRecord(
+                    from: table,
+                    primaryKey: primaryKey,
+                    value: primaryKeyValue,
+                    databaseURL: databaseURL
+                )
+            } catch {
+                throw WorkspaceAppActionExecutionError.storageFailed(String(describing: error))
+            }
+            return ([], "Deleted 1 record from \(table).", nil, nil)
         case "appStorage.query":
             guard let table = input.table ?? action.table else { throw WorkspaceAppActionExecutionError.missingTable }
             do {
@@ -314,6 +366,17 @@ struct WorkspaceAppActionExecutor {
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
         }
+    }
+
+    private func primaryKeyColumn(
+        in tableName: String,
+        manifest: WorkspaceAppManifest
+    ) throws -> String {
+        guard let table = manifest.storage?.tables.first(where: { $0.name == tableName }),
+              let primaryKey = table.columns.first(where: \.primaryKey)?.name else {
+            throw WorkspaceAppActionExecutionError.missingPrimaryKey(tableName)
+        }
+        return primaryKey
     }
 
     private func exportStorageArtifact(
@@ -486,7 +549,7 @@ struct WorkspaceAppActionExecutor {
         let table = input.table ?? "none"
         let taskGoal = input.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? "present" : "none"
         let exportFormat = input.exportFormat ?? "none"
-        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal)"
+        return "table=\(table); recordKeys=\(input.record.keys.sorted().joined(separator: ",")); limit=\(input.limit); exportFormat=\(exportFormat); taskGoal=\(taskGoal); confirmedDestructive=\(input.confirmedDestructive)"
     }
 
     private func isPermissionError(_ error: Error) -> Bool {

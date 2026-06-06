@@ -11,6 +11,8 @@ enum WorkspaceAppStorageError: LocalizedError, Equatable {
     case executeFailed(String)
     case bindFailed(String)
     case missingRecordValues
+    case missingPrimaryKeyValue(String)
+    case recordNotFound(String)
 
     var errorDescription: String? {
         switch self {
@@ -28,6 +30,10 @@ enum WorkspaceAppStorageError: LocalizedError, Equatable {
             "Could not bind app storage value: \(message)"
         case .missingRecordValues:
             "Record must contain at least one value."
+        case .missingPrimaryKeyValue(let key):
+            "Record must contain primary key '\(key)'."
+        case .recordNotFound(let key):
+            "No app storage record matched primary key '\(key)'."
         }
     }
 }
@@ -116,6 +122,69 @@ struct WorkspaceAppStorageService {
             }
             guard sqlite3_step(statement) == SQLITE_DONE else {
                 throw WorkspaceAppStorageError.executeFailed(lastError(database))
+            }
+        }
+    }
+
+    func updateRecord(
+        _ record: [String: WorkspaceAppStorageValue],
+        in table: String,
+        primaryKey: String,
+        databaseURL: URL
+    ) throws {
+        guard !record.isEmpty else { throw WorkspaceAppStorageError.missingRecordValues }
+        guard let primaryKeyValue = record[primaryKey] else {
+            throw WorkspaceAppStorageError.missingPrimaryKeyValue(primaryKey)
+        }
+        let updateKeys = record.keys.sorted().filter { $0 != primaryKey }
+        guard !updateKeys.isEmpty else { throw WorkspaceAppStorageError.missingRecordValues }
+
+        let tableName = try quotedIdentifier(table)
+        let assignments = try updateKeys.map { "\(try quotedIdentifier($0)) = ?" }.joined(separator: ", ")
+        let primaryKeyName = try quotedIdentifier(primaryKey)
+        let sql = "UPDATE \(tableName) SET \(assignments) WHERE \(primaryKeyName) = ?;"
+        try withDatabase(at: databaseURL) { database in
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw WorkspaceAppStorageError.prepareFailed(lastError(database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            for (index, key) in updateKeys.enumerated() {
+                try bind(record[key] ?? .null, to: Int32(index + 1), statement: statement, database: database)
+            }
+            try bind(primaryKeyValue, to: Int32(updateKeys.count + 1), statement: statement, database: database)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw WorkspaceAppStorageError.executeFailed(lastError(database))
+            }
+            guard sqlite3_changes(database) > 0 else {
+                throw WorkspaceAppStorageError.recordNotFound(primaryKey)
+            }
+        }
+    }
+
+    func deleteRecord(
+        from table: String,
+        primaryKey: String,
+        value primaryKeyValue: WorkspaceAppStorageValue,
+        databaseURL: URL
+    ) throws {
+        let tableName = try quotedIdentifier(table)
+        let primaryKeyName = try quotedIdentifier(primaryKey)
+        let sql = "DELETE FROM \(tableName) WHERE \(primaryKeyName) = ?;"
+        try withDatabase(at: databaseURL) { database in
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
+                throw WorkspaceAppStorageError.prepareFailed(lastError(database))
+            }
+            defer { sqlite3_finalize(statement) }
+
+            try bind(primaryKeyValue, to: 1, statement: statement, database: database)
+            guard sqlite3_step(statement) == SQLITE_DONE else {
+                throw WorkspaceAppStorageError.executeFailed(lastError(database))
+            }
+            guard sqlite3_changes(database) > 0 else {
+                throw WorkspaceAppStorageError.recordNotFound(primaryKey)
             }
         }
     }

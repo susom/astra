@@ -130,6 +130,26 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects storage actions with unknown tables")
+    func validationRejectsStorageActionsWithUnknownTables() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "update_missing",
+                type: "appStorage.update",
+                label: "Update",
+                table: "missing_table"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/table" && $0.message.contains("missing_table")
+        })
+    }
+
     @Test("manifest encoding preserves native widget specs")
     func manifestEncodingPreservesNativeWidgetSpecs() throws {
         let manifest = Self.reconciliationManifest()

@@ -53,6 +53,97 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("app storage update and delete actions mutate records with primary key input")
+    func appStorageUpdateAndDeleteActionsMutateRecordsWithPrimaryKeyInput() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        let updateResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "updateItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Oranges"),
+                    "category": .text("Citrus")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+        let queryResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "listItems",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(table: "items"),
+            modelContext: fixture.context
+        )
+
+        #expect(updateResult.outputSummary == "Updated 1 record in items.")
+        #expect(queryResult.rows.count == 1)
+        #expect(queryResult.rows[0]["name"] == .text("Oranges"))
+        #expect(queryResult.rows[0]["category"] == .text("Citrus"))
+
+        #expect(throws: WorkspaceAppActionExecutionError.permissionDenied(
+            "Destructive action 'deleteItem' requires explicit confirmation before execution."
+        )) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "deleteItem",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                input: WorkspaceAppActionInput(
+                    table: "items",
+                    record: ["id": .text("item-1")]
+                ),
+                modelContext: fixture.context
+            )
+        }
+
+        let deleteResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "deleteItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: ["id": .text("item-1")],
+                confirmedDestructive: true
+            ),
+            modelContext: fixture.context
+        )
+        let finalQuery = try WorkspaceAppActionExecutor().execute(
+            actionID: "listItems",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(table: "items"),
+            modelContext: fixture.context
+        )
+
+        #expect(deleteResult.outputSummary == "Deleted 1 record from items.")
+        #expect(finalQuery.rows.isEmpty)
+    }
+
+    @MainActor
     @Test("artifact export actions write linked CSV files from app storage")
     func artifactExportActionsWriteLinkedCSVFilesFromAppStorage() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
@@ -322,6 +413,18 @@ struct WorkspaceAppActionExecutorTests {
                     label: "List Items",
                     requirementRef: "localRecords",
                     operation: "queryRecords"
+                ),
+                WorkspaceAppActionSpec(
+                    id: "updateItem",
+                    type: "appStorage.update",
+                    label: "Update Item",
+                    table: "items"
+                ),
+                WorkspaceAppActionSpec(
+                    id: "deleteItem",
+                    type: "appStorage.delete",
+                    label: "Delete Item",
+                    table: "items"
                 ),
                 WorkspaceAppActionSpec(
                     id: "createReviewTask",

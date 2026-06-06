@@ -109,6 +109,53 @@ struct WorkspaceAppStorageTests {
         #expect(rows[0]["purchased_at"] == .text("2026-06-05"))
     }
 
+    @Test("storage updates and deletes records by primary key")
+    func storageUpdatesAndDeletesRecordsByPrimaryKey() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("workspace-app-storage-crud-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let databaseURL = root.appendingPathComponent("app.sqlite")
+        let service = WorkspaceAppStorageService()
+        try service.applySchema(Self.grocerySchema(), databaseURL: databaseURL)
+        try service.insertRecord(
+            [
+                "id": .text("item-1"),
+                "name": .text("Apples"),
+                "category": .text("Produce")
+            ],
+            into: "items",
+            databaseURL: databaseURL
+        )
+
+        try service.updateRecord(
+            [
+                "id": .text("item-1"),
+                "name": .text("Oranges"),
+                "quantity": .integer(4)
+            ],
+            in: "items",
+            primaryKey: "id",
+            databaseURL: databaseURL
+        )
+
+        var rows = try service.records(in: "items", databaseURL: databaseURL)
+        #expect(rows.count == 1)
+        #expect(rows[0]["name"] == .text("Oranges"))
+        #expect(rows[0]["quantity"] == .integer(4))
+
+        try service.deleteRecord(
+            from: "items",
+            primaryKey: "id",
+            value: .text("item-1"),
+            databaseURL: databaseURL
+        )
+
+        rows = try service.records(in: "items", databaseURL: databaseURL)
+        #expect(rows.isEmpty)
+    }
+
     static func grocerySchema() -> WorkspaceAppStorageSchema {
         WorkspaceAppStorageSchema(tables: [
             WorkspaceAppStorageTable(name: "items", columns: [
