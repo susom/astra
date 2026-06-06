@@ -333,6 +333,111 @@ struct WorkspaceAppPackageTests {
     }
 
     @MainActor
+    @Test("package update checks compare package identity version and digest")
+    func packageUpdateChecksComparePackageIdentityVersionAndDigest() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let service = WorkspaceAppPackageService()
+        let originalURL = root.appendingPathComponent("grocery-1.2.astra-app", isDirectory: true)
+        let newerURL = root.appendingPathComponent("grocery-1.10.astra-app", isDirectory: true)
+        let changedSameVersionURL = root.appendingPathComponent("grocery-1.2-changed.astra-app", isDirectory: true)
+        let differentPackageURL = root.appendingPathComponent("other.astra-app", isDirectory: true)
+
+        _ = try service.exportPackage(
+            manifest: Self.groceryManifest(),
+            to: originalURL,
+            packageID: "grocery-template",
+            version: "1.2.0"
+        )
+        _ = try service.exportPackage(
+            manifest: Self.groceryManifest(),
+            to: newerURL,
+            packageID: "grocery-template",
+            version: "1.10.0"
+        )
+        var changedManifest = Self.groceryManifest()
+        changedManifest.app.description = "Track pantry inventory with a reviewed template change."
+        _ = try service.exportPackage(
+            manifest: changedManifest,
+            to: changedSameVersionURL,
+            packageID: "grocery-template",
+            version: "1.2.0"
+        )
+        _ = try service.exportPackage(
+            manifest: Self.groceryManifest(),
+            to: differentPackageURL,
+            packageID: "another-template",
+            version: "9.0.0"
+        )
+
+        let container = try ModelContainer(
+            for: ASTRASchema.current,
+            migrationPlan: ASTRAMigrationPlan.self,
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let workspaceURL = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspaceURL, withIntermediateDirectories: true)
+        let workspace = Workspace(name: "Package Updates", primaryPath: workspaceURL.path)
+        container.mainContext.insert(workspace)
+        let imported = try service.importPackage(
+            at: originalURL,
+            into: workspace,
+            modelContext: container.mainContext
+        )
+
+        let same = service.checkPackageUpdate(for: imported.app, candidatePackageURL: originalURL)
+        let newer = service.checkPackageUpdate(for: imported.app, candidatePackageURL: newerURL)
+        let changed = service.checkPackageUpdate(for: imported.app, candidatePackageURL: changedSameVersionURL)
+        let different = service.checkPackageUpdate(for: imported.app, candidatePackageURL: differentPackageURL)
+
+        #expect(same.status == .sameVersionSameDigest)
+        #expect(!same.isUpdateAvailable)
+        #expect(!same.requiresReview)
+        #expect(newer.status == .updateAvailable)
+        #expect(newer.isUpdateAvailable)
+        #expect(newer.requiresReview)
+        #expect(newer.candidateVersion == "1.10.0")
+        #expect(changed.status == .sameVersionDifferentDigest)
+        #expect(!changed.isUpdateAvailable)
+        #expect(changed.requiresReview)
+        #expect(changed.installedDigest != changed.candidateDigest)
+        #expect(different.status == .differentPackage)
+        #expect(different.candidatePackageID == "another-template")
+    }
+
+    @MainActor
+    @Test("package update checks classify apps without package provenance")
+    func packageUpdateChecksClassifyAppsWithoutPackageProvenance() throws {
+        let root = try Self.temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let packageURL = root.appendingPathComponent("grocery.astra-app", isDirectory: true)
+        let service = WorkspaceAppPackageService()
+        _ = try service.exportPackage(
+            manifest: Self.groceryManifest(),
+            to: packageURL,
+            packageID: "grocery-template",
+            version: "2.0.0"
+        )
+
+        let app = WorkspaceApp(
+            workspaceID: UUID(),
+            logicalID: "local-grocery",
+            name: "Local Grocery",
+            manifestRelativePath: ".astra/apps/local-grocery/manifest.json",
+            appDirectoryRelativePath: ".astra/apps/local-grocery",
+            manifestDigest: "local"
+        )
+
+        let check = service.checkPackageUpdate(for: app, candidatePackageURL: packageURL)
+
+        #expect(check.status == .notPackageBacked)
+        #expect(check.installedPackageID == nil)
+        #expect(check.candidatePackageID == "grocery-template")
+        #expect(!check.isUpdateAvailable)
+        #expect(!check.requiresReview)
+    }
+
+    @MainActor
     @Test("package exporter writes workspace-local portable exports without overwriting")
     func packageExporterWritesWorkspaceLocalPortableExportsWithoutOverwriting() throws {
         let root = try Self.temporaryRoot()

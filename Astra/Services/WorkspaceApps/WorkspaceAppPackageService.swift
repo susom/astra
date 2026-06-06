@@ -61,9 +61,9 @@ enum WorkspaceAppPackageDataExportPolicy: String, Codable, Sendable, Equatable, 
     case full
 }
 
-struct WorkspaceAppPackageValidationReport: Equatable {
-    struct Issue: Equatable {
-        enum Severity: String, Equatable {
+struct WorkspaceAppPackageValidationReport: Sendable, Equatable {
+    struct Issue: Sendable, Equatable {
+        enum Severity: String, Sendable, Equatable {
             case blocker
             case warning
         }
@@ -88,6 +88,35 @@ struct WorkspaceAppPackageValidationReport: Equatable {
 
     var canInstall: Bool {
         blockers.isEmpty && package != nil && manifest != nil
+    }
+}
+
+enum WorkspaceAppPackageUpdateStatus: String, Sendable, Equatable {
+    case notPackageBacked
+    case invalidCandidate
+    case differentPackage
+    case sameVersionSameDigest
+    case sameVersionDifferentDigest
+    case updateAvailable
+    case installedVersionNewer
+}
+
+struct WorkspaceAppPackageUpdateCheck: Sendable, Equatable {
+    var status: WorkspaceAppPackageUpdateStatus
+    var installedPackageID: String?
+    var installedVersion: String?
+    var installedDigest: String?
+    var candidatePackageID: String?
+    var candidateVersion: String?
+    var candidateDigest: String?
+    var validationReport: WorkspaceAppPackageValidationReport
+
+    var isUpdateAvailable: Bool {
+        status == .updateAvailable
+    }
+
+    var requiresReview: Bool {
+        status == .updateAvailable || status == .sameVersionDifferentDigest
     }
 }
 
@@ -256,8 +285,7 @@ struct WorkspaceAppPackageService {
               var manifest = report.manifest else {
             throw WorkspaceAppPackageError.invalidPackage(report)
         }
-        let checksumsURL = packageURL.appendingPathComponent("checksums.json")
-        let packageDigest = digest(for: checksumsURL)
+        let packageDigest = packageDigest(at: packageURL)
         let existingIDs = try existingLogicalIDs(in: workspace, modelContext: modelContext)
         manifest = manifestForImport(manifest, existingLogicalIDs: existingIDs)
         let result = try appService.createApp(
@@ -274,6 +302,76 @@ struct WorkspaceAppPackageService {
             app: result.app,
             report: report,
             manifestURL: result.manifestURL
+        )
+    }
+
+    func checkPackageUpdate(
+        for app: WorkspaceApp,
+        candidatePackageURL: URL
+    ) -> WorkspaceAppPackageUpdateCheck {
+        let report = validatePackage(at: candidatePackageURL)
+        let package = report.package
+        let candidateDigest = packageDigest(at: candidatePackageURL)
+        guard let installedPackageID = app.sourcePackageID,
+              let installedVersion = app.sourcePackageVersion else {
+            return WorkspaceAppPackageUpdateCheck(
+                status: .notPackageBacked,
+                installedPackageID: app.sourcePackageID,
+                installedVersion: app.sourcePackageVersion,
+                installedDigest: app.sourcePackageDigest,
+                candidatePackageID: package?.packageID,
+                candidateVersion: package?.version,
+                candidateDigest: candidateDigest,
+                validationReport: report
+            )
+        }
+        guard report.canInstall,
+              let package else {
+            return WorkspaceAppPackageUpdateCheck(
+                status: .invalidCandidate,
+                installedPackageID: installedPackageID,
+                installedVersion: installedVersion,
+                installedDigest: app.sourcePackageDigest,
+                candidatePackageID: package?.packageID,
+                candidateVersion: package?.version,
+                candidateDigest: candidateDigest,
+                validationReport: report
+            )
+        }
+        guard package.packageID == installedPackageID else {
+            return WorkspaceAppPackageUpdateCheck(
+                status: .differentPackage,
+                installedPackageID: installedPackageID,
+                installedVersion: installedVersion,
+                installedDigest: app.sourcePackageDigest,
+                candidatePackageID: package.packageID,
+                candidateVersion: package.version,
+                candidateDigest: candidateDigest,
+                validationReport: report
+            )
+        }
+
+        let versionComparison = comparePackageVersions(package.version, installedVersion)
+        let status: WorkspaceAppPackageUpdateStatus
+        if versionComparison > 0 {
+            status = .updateAvailable
+        } else if versionComparison < 0 {
+            status = .installedVersionNewer
+        } else if app.sourcePackageDigest == candidateDigest {
+            status = .sameVersionSameDigest
+        } else {
+            status = .sameVersionDifferentDigest
+        }
+
+        return WorkspaceAppPackageUpdateCheck(
+            status: status,
+            installedPackageID: installedPackageID,
+            installedVersion: installedVersion,
+            installedDigest: app.sourcePackageDigest,
+            candidatePackageID: package.packageID,
+            candidateVersion: package.version,
+            candidateDigest: candidateDigest,
+            validationReport: report
         )
     }
 
@@ -596,6 +694,32 @@ struct WorkspaceAppPackageService {
     private func digest(for url: URL) -> String {
         guard let data = try? Data(contentsOf: url) else { return "" }
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func packageDigest(at packageURL: URL) -> String {
+        digest(for: packageURL.appendingPathComponent("checksums.json"))
+    }
+
+    private func comparePackageVersions(_ lhs: String, _ rhs: String) -> Int {
+        let left = versionComponents(lhs)
+        let right = versionComponents(rhs)
+        let maxCount = max(left.count, right.count)
+        for index in 0..<maxCount {
+            let leftValue = index < left.count ? left[index] : 0
+            let rightValue = index < right.count ? right[index] : 0
+            if leftValue < rightValue { return -1 }
+            if leftValue > rightValue { return 1 }
+        }
+        return 0
+    }
+
+    private func versionComponents(_ version: String) -> [Int] {
+        version
+            .split(separator: ".", omittingEmptySubsequences: false)
+            .map { component in
+                let numericPrefix = component.prefix { $0.isNumber }
+                return Int(numericPrefix) ?? 0
+            }
     }
 
     private func blocker(_ path: String, _ message: String) -> WorkspaceAppPackageValidationReport.Issue {
