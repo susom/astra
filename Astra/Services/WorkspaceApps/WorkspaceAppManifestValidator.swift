@@ -40,8 +40,9 @@ enum WorkspaceAppManifestValidator {
         }
 
         let requirementIDs = validateRequirements(manifest.requirements, issues: &issues)
-        validateStorage(manifest.storage, issues: &issues)
+        let storageTables = validateStorage(manifest.storage, issues: &issues)
         validateSources(manifest.sources, requirementIDs: requirementIDs, issues: &issues)
+        validateViews(manifest.views, storageTables: storageTables, issues: &issues)
         validateActions(manifest.actions, requirementIDs: requirementIDs, issues: &issues)
         validateAutomations(manifest.automations, actionIDs: Set(manifest.actions.map(\.id)), issues: &issues)
         validatePermissions(manifest.permissions, issues: &issues)
@@ -82,9 +83,10 @@ enum WorkspaceAppManifestValidator {
     private static func validateStorage(
         _ storage: WorkspaceAppStorageSchema?,
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
-    ) {
-        guard let storage else { return }
+    ) -> [String: Set<String>] {
+        guard let storage else { return [:] }
         var tableNames = Set<String>()
+        var tables: [String: Set<String>] = [:]
         for (tableIndex, table) in storage.tables.enumerated() {
             let tablePath = "/storage/tables/\(tableIndex)"
             validateUniqueIdentifier(
@@ -109,7 +111,9 @@ enum WorkspaceAppManifestValidator {
                 )
                 validateIdentifier(column.type, path: "\(columnPath)/type", label: "Column type", issues: &issues)
             }
+            tables[table.name] = columnNames
         }
+        return tables
     }
 
     private static func validateSources(
@@ -131,6 +135,101 @@ enum WorkspaceAppManifestValidator {
                !requirementIDs.contains(requirementRef) {
                 issues.append(blocker("\(path)/requirementRef", "Source references unknown requirement '\(requirementRef)'."))
             }
+        }
+    }
+
+    private static func validateViews(
+        _ views: [WorkspaceAppViewSpec],
+        storageTables: [String: Set<String>],
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        var seen = Set<String>()
+        for (viewIndex, view) in views.enumerated() {
+            let path = "/views/\(viewIndex)"
+            validateUniqueIdentifier(
+                view.id,
+                path: "\(path)/id",
+                label: "View ID",
+                seen: &seen,
+                issues: &issues
+            )
+            validateIdentifier(view.type, path: "\(path)/type", label: "View type", issues: &issues)
+            if let table = view.table {
+                validateStorageTableReference(table, path: "\(path)/table", storageTables: storageTables, issues: &issues)
+            }
+
+            var widgetIDs = Set<String>()
+            for (widgetIndex, widget) in view.widgets.enumerated() {
+                let widgetPath = "\(path)/widgets/\(widgetIndex)"
+                validateUniqueIdentifier(
+                    widget.id,
+                    path: "\(widgetPath)/id",
+                    label: "Widget ID",
+                    seen: &widgetIDs,
+                    issues: &issues
+                )
+                validateIdentifier(widget.type, path: "\(widgetPath)/type", label: "Widget type", issues: &issues)
+                if widget.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    issues.append(blocker("\(widgetPath)/label", "Widget label is required."))
+                }
+                validateWidgetBinding(
+                    widget,
+                    path: widgetPath,
+                    viewTable: view.table,
+                    storageTables: storageTables,
+                    issues: &issues
+                )
+            }
+        }
+    }
+
+    private static func validateWidgetBinding(
+        _ widget: WorkspaceAppWidgetSpec,
+        path: String,
+        viewTable: String?,
+        storageTables: [String: Set<String>],
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        let table = widget.table ?? viewTable
+        switch widget.type {
+        case "metric", "chart":
+            guard let table else {
+                issues.append(blocker("\(path)/table", "Storage-backed widget must reference a table."))
+                return
+            }
+            validateStorageTableReference(table, path: "\(path)/table", storageTables: storageTables, issues: &issues)
+            if let field = widget.field {
+                validateStorageFieldReference(field, table: table, path: "\(path)/field", storageTables: storageTables, issues: &issues)
+            }
+            if let groupBy = widget.groupBy {
+                validateStorageFieldReference(groupBy, table: table, path: "\(path)/groupBy", storageTables: storageTables, issues: &issues)
+            }
+        default:
+            break
+        }
+    }
+
+    private static func validateStorageTableReference(
+        _ table: String,
+        path: String,
+        storageTables: [String: Set<String>],
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        if storageTables[table] == nil {
+            issues.append(blocker(path, "References unknown storage table '\(table)'."))
+        }
+    }
+
+    private static func validateStorageFieldReference(
+        _ field: String,
+        table: String,
+        path: String,
+        storageTables: [String: Set<String>],
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        guard let columns = storageTables[table] else { return }
+        if !columns.contains(field) {
+            issues.append(blocker(path, "References unknown field '\(field)' on storage table '\(table)'."))
         }
     }
 

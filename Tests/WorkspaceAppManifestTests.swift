@@ -54,6 +54,90 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects view widgets bound to unknown storage")
+    func validationRejectsUnknownViewWidgetStorageBindings() {
+        var manifest = Self.reconciliationManifest()
+        manifest.views = [
+            WorkspaceAppViewSpec(
+                id: "dashboard",
+                type: "dashboard",
+                title: "Dashboard",
+                table: "missing_table",
+                widgets: [
+                    WorkspaceAppWidgetSpec(
+                        id: "missing_metric",
+                        type: "metric",
+                        label: "Missing",
+                        table: "review_items",
+                        field: "missing_field",
+                        aggregation: "sum"
+                    )
+                ]
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/table" && $0.message.contains("missing_table")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/field" && $0.message.contains("missing_field")
+        })
+    }
+
+    @Test("manifest encoding preserves native widget specs")
+    func manifestEncodingPreservesNativeWidgetSpecs() throws {
+        let manifest = Self.reconciliationManifest()
+        let data = try WorkspaceAppService.encodeManifest(manifest)
+        let decoded = try JSONDecoder().decode(WorkspaceAppManifest.self, from: data)
+        let view = try #require(decoded.views.first)
+        let widget = try #require(view.widgets.first)
+
+        #expect(view.table == "review_items")
+        #expect(widget.id == "review_count")
+        #expect(widget.type == "metric")
+        #expect(widget.table == nil)
+        #expect(widget.aggregation == "count")
+    }
+
+    @Test("manifest decoding keeps legacy view specs without widgets compatible")
+    func manifestDecodingKeepsLegacyViewSpecsCompatible() throws {
+        let json = """
+        {
+          "schemaVersion": 1,
+          "app": {
+            "id": "legacy-app",
+            "name": "Legacy App",
+            "icon": "square.grid.2x2",
+            "description": "",
+            "tags": [],
+            "archetypes": []
+          },
+          "requirements": [],
+          "sources": [],
+          "views": [
+            {"id": "dashboard", "type": "dashboard", "title": "Dashboard"}
+          ],
+          "actions": [],
+          "automations": [],
+          "permissions": {
+            "reads": [],
+            "writes": [],
+            "externalWrites": [],
+            "defaultMode": "readOnly"
+          }
+        }
+        """
+
+        let manifest = try JSONDecoder().decode(WorkspaceAppManifest.self, from: Data(json.utf8))
+
+        #expect(manifest.views.count == 1)
+        #expect(manifest.views[0].table == nil)
+        #expect(manifest.views[0].widgets.isEmpty)
+    }
+
     @Test("manifest encoding is stable enough for digest checks")
     func manifestEncodingIsStable() throws {
         let manifest = Self.reconciliationManifest()
@@ -199,7 +283,27 @@ struct WorkspaceAppManifestTests {
                 )
             ],
             views: [
-                WorkspaceAppViewSpec(id: "dashboard", type: "dashboard", title: "Enrollment Reconciliation")
+                WorkspaceAppViewSpec(
+                    id: "dashboard",
+                    type: "dashboard",
+                    title: "Enrollment Reconciliation",
+                    table: "review_items",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "review_count",
+                            type: "metric",
+                            label: "Review records",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "records_by_status",
+                            type: "chart",
+                            label: "Records by status",
+                            groupBy: "match_status",
+                            aggregation: "count"
+                        )
+                    ]
+                )
             ],
             actions: [
                 WorkspaceAppActionSpec(id: "refresh", type: "pipeline", label: "Refresh")

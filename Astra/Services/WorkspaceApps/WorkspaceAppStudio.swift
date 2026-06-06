@@ -125,9 +125,38 @@ enum WorkspaceAppStudioBuilder {
                 WorkspaceAppSource(id: "local_grocery_tables", mode: "read", sourceRef: "appStorage")
             ],
             views: [
-                WorkspaceAppViewSpec(id: "items_table", type: "table", title: "Items"),
+                WorkspaceAppViewSpec(id: "items_table", type: "table", title: "Items", table: "items"),
                 WorkspaceAppViewSpec(id: "shopping_list", type: "form", title: "Shopping List"),
-                WorkspaceAppViewSpec(id: "spend_metrics", type: "dashboard", title: "Spend Metrics")
+                WorkspaceAppViewSpec(
+                    id: "spend_metrics",
+                    type: "dashboard",
+                    title: "Spend Metrics",
+                    table: "purchases",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "item_count",
+                            type: "metric",
+                            label: "Tracked items",
+                            table: "items",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "total_spend",
+                            type: "metric",
+                            label: "Total spend",
+                            field: "price",
+                            aggregation: "sum"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "spend_by_store",
+                            type: "chart",
+                            label: "Spend by store",
+                            field: "price",
+                            groupBy: "store",
+                            aggregation: "sum"
+                        )
+                    ]
+                )
             ],
             actions: [
                 WorkspaceAppActionSpec(id: "list_items", type: "appStorage.query", label: "List Items"),
@@ -166,8 +195,28 @@ enum WorkspaceAppStudioBuilder {
                 WorkspaceAppSource(id: "workspace_context", mode: "read", sourceRef: "workspace")
             ],
             views: [
-                WorkspaceAppViewSpec(id: "overview", type: "dashboard", title: "Overview"),
-                WorkspaceAppViewSpec(id: "review_queue", type: "table", title: "Review Queue")
+                WorkspaceAppViewSpec(
+                    id: "overview",
+                    type: "dashboard",
+                    title: "Overview",
+                    table: "review_items",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "review_item_count",
+                            type: "metric",
+                            label: "Review items",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "review_status_chart",
+                            type: "chart",
+                            label: "Items by status",
+                            groupBy: "status",
+                            aggregation: "count"
+                        )
+                    ]
+                ),
+                WorkspaceAppViewSpec(id: "review_queue", type: "table", title: "Review Queue", table: "review_items")
             ],
             actions: [
                 WorkspaceAppActionSpec(id: "list_review_items", type: "appStorage.query", label: "List Review Items"),

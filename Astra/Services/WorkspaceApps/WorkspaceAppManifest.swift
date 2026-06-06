@@ -160,11 +160,66 @@ struct WorkspaceAppViewSpec: Codable, Sendable, Equatable {
     var id: String
     var type: String
     var title: String?
+    var table: String?
+    var widgets: [WorkspaceAppWidgetSpec]
 
-    init(id: String, type: String, title: String? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case title
+        case table
+        case widgets
+    }
+
+    init(
+        id: String,
+        type: String,
+        title: String? = nil,
+        table: String? = nil,
+        widgets: [WorkspaceAppWidgetSpec] = []
+    ) {
         self.id = id
         self.type = type
         self.title = title
+        self.table = table
+        self.widgets = widgets
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(String.self, forKey: .type)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        table = try container.decodeIfPresent(String.self, forKey: .table)
+        widgets = try container.decodeIfPresent([WorkspaceAppWidgetSpec].self, forKey: .widgets) ?? []
+    }
+}
+
+struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
+    var id: String
+    var type: String
+    var label: String
+    var table: String?
+    var field: String?
+    var groupBy: String?
+    var aggregation: String?
+
+    init(
+        id: String,
+        type: String,
+        label: String,
+        table: String? = nil,
+        field: String? = nil,
+        groupBy: String? = nil,
+        aggregation: String? = nil
+    ) {
+        self.id = id
+        self.type = type
+        self.label = label
+        self.table = table
+        self.field = field
+        self.groupBy = groupBy
+        self.aggregation = aggregation
     }
 }
 

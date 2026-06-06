@@ -28,6 +28,7 @@ struct WorkspaceAppDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     appSurface
+                    nativeSurfaceSection
                     actionsSection
                     storageSection
                     metadataRows
@@ -156,6 +157,45 @@ struct WorkspaceAppDetailView: View {
             WorkspaceAppMetadataRow(label: "Activity", value: presentation.lastActivityLabel)
         }
         .font(Stanford.caption(12))
+    }
+
+    @ViewBuilder
+    private var nativeSurfaceSection: some View {
+        let surface = WorkspaceAppNativeSurfaceBuilder.presentation(
+            manifest: dataSnapshot.manifest,
+            storageTables: dataSnapshot.storageTables
+        )
+        if !surface.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Overview")
+                        .font(Stanford.ui(15, weight: .semibold))
+                        .foregroundStyle(.primary)
+
+                    Text("\(surface.metrics.count + surface.charts.count) widgets")
+                        .font(Stanford.caption(11).weight(.medium))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
+                if !surface.metrics.isEmpty {
+                    LazyVGrid(
+                        columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 10, alignment: .top)],
+                        alignment: .leading,
+                        spacing: 10
+                    ) {
+                        ForEach(surface.metrics) { metric in
+                            WorkspaceAppMetricCard(metric: metric)
+                        }
+                    }
+                }
+
+                ForEach(surface.charts) { chart in
+                    WorkspaceAppChartCard(chart: chart)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -318,6 +358,103 @@ struct WorkspaceAppDetailView: View {
         } catch {
             packageStatusMessage = String(describing: error)
         }
+    }
+}
+
+private struct WorkspaceAppMetricCard: View {
+    let metric: WorkspaceAppMetricPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(metric.label)
+                .font(Stanford.caption(11).weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            Text(metric.value)
+                .font(Stanford.ui(24, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Text(metric.detail)
+                .font(Stanford.caption(11))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, minHeight: 96, alignment: .leading)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+        .help("Storage-backed metric: \(metric.detail)")
+    }
+}
+
+private struct WorkspaceAppChartCard: View {
+    let chart: WorkspaceAppChartPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(chart.label)
+                .font(Stanford.ui(13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+
+            if chart.bars.isEmpty {
+                Text(chart.emptyMessage)
+                    .font(Stanford.caption(12))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(chart.bars) { bar in
+                        WorkspaceAppChartBarRow(bar: bar)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(Stanford.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+}
+
+private struct WorkspaceAppChartBarRow: View {
+    let bar: WorkspaceAppChartPresentation.Bar
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(bar.label)
+                .font(Stanford.caption(12))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 110, alignment: .leading)
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.primary.opacity(0.06))
+                    Capsule()
+                        .fill(Stanford.lagunita.opacity(0.78))
+                        .frame(width: max(proxy.size.width * bar.fraction, 3))
+                }
+            }
+            .frame(height: 8)
+
+            Text(bar.displayValue)
+                .font(Stanford.caption(11).weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: 52, alignment: .trailing)
+        }
+        .frame(minHeight: 20)
     }
 }
 

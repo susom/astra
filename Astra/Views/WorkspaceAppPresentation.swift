@@ -41,6 +41,37 @@ struct WorkspaceAppDetailActionPresentation: Identifiable, Equatable {
     var input: WorkspaceAppActionInput
 }
 
+struct WorkspaceAppNativeSurfacePresentation: Equatable {
+    var metrics: [WorkspaceAppMetricPresentation]
+    var charts: [WorkspaceAppChartPresentation]
+
+    var isEmpty: Bool {
+        metrics.isEmpty && charts.isEmpty
+    }
+}
+
+struct WorkspaceAppMetricPresentation: Identifiable, Equatable {
+    var id: String
+    var label: String
+    var value: String
+    var detail: String
+}
+
+struct WorkspaceAppChartPresentation: Identifiable, Equatable {
+    struct Bar: Identifiable, Equatable {
+        var id: String { label }
+        var label: String
+        var value: Double
+        var displayValue: String
+        var fraction: Double
+    }
+
+    var id: String
+    var label: String
+    var bars: [Bar]
+    var emptyMessage: String
+}
+
 struct WorkspaceAppStorageFormField: Identifiable, Equatable {
     var id: String { name }
     var name: String
@@ -138,6 +169,151 @@ enum WorkspaceAppStorageRecordDraftBuilder {
         default:
             return .text(rawValue)
         }
+    }
+}
+
+enum WorkspaceAppNativeSurfaceBuilder {
+    static func presentation(
+        manifest: WorkspaceAppManifest?,
+        storageTables: [WorkspaceAppStorageTableSnapshot]
+    ) -> WorkspaceAppNativeSurfacePresentation {
+        guard let manifest else {
+            return WorkspaceAppNativeSurfacePresentation(metrics: [], charts: [])
+        }
+
+        let tablesByName = Dictionary(uniqueKeysWithValues: storageTables.map { ($0.name, $0) })
+        var metrics: [WorkspaceAppMetricPresentation] = []
+        var charts: [WorkspaceAppChartPresentation] = []
+
+        for view in manifest.views {
+            for widget in view.widgets {
+                let tableName = widget.table ?? view.table
+                guard let tableName, let table = tablesByName[tableName], table.errorMessage == nil else {
+                    continue
+                }
+                switch widget.type {
+                case "metric":
+                    metrics.append(metric(widget: widget, table: table))
+                case "chart":
+                    charts.append(chart(widget: widget, table: table))
+                default:
+                    continue
+                }
+            }
+        }
+
+        return WorkspaceAppNativeSurfacePresentation(metrics: metrics, charts: charts)
+    }
+
+    private static func metric(
+        widget: WorkspaceAppWidgetSpec,
+        table: WorkspaceAppStorageTableSnapshot
+    ) -> WorkspaceAppMetricPresentation {
+        switch widget.aggregation ?? "count" {
+        case "sum":
+            let value = table.rows.reduce(0) { partial, row in
+                partial + numericValue(row[widget.field ?? ""])
+            }
+            return WorkspaceAppMetricPresentation(
+                id: widget.id,
+                label: widget.label,
+                value: formattedNumber(value),
+                detail: "\(table.name).\(widget.field ?? "value")"
+            )
+        default:
+            return WorkspaceAppMetricPresentation(
+                id: widget.id,
+                label: widget.label,
+                value: "\(table.rowCount)",
+                detail: "\(table.name) records"
+            )
+        }
+    }
+
+    private static func chart(
+        widget: WorkspaceAppWidgetSpec,
+        table: WorkspaceAppStorageTableSnapshot
+    ) -> WorkspaceAppChartPresentation {
+        let groupBy = widget.groupBy ?? widget.field
+        guard let groupBy else {
+            return WorkspaceAppChartPresentation(
+                id: widget.id,
+                label: widget.label,
+                bars: [],
+                emptyMessage: "Chart needs a grouping field."
+            )
+        }
+
+        var grouped: [String: Double] = [:]
+        for row in table.rows {
+            let label = displayValue(row[groupBy])
+            let increment: Double
+            if widget.aggregation == "sum", let field = widget.field {
+                increment = numericValue(row[field])
+            } else {
+                increment = 1
+            }
+            grouped[label, default: 0] += increment
+        }
+
+        let maxValue = max(grouped.values.max() ?? 0, 1)
+        let bars = grouped
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value {
+                    return lhs.value > rhs.value
+                }
+                return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
+            }
+            .prefix(8)
+            .map { label, value in
+                WorkspaceAppChartPresentation.Bar(
+                    label: label,
+                    value: value,
+                    displayValue: formattedNumber(value),
+                    fraction: min(max(value / maxValue, 0), 1)
+                )
+            }
+
+        return WorkspaceAppChartPresentation(
+            id: widget.id,
+            label: widget.label,
+            bars: bars,
+            emptyMessage: "No chart data yet."
+        )
+    }
+
+    private static func numericValue(_ value: WorkspaceAppStorageValue?) -> Double {
+        switch value {
+        case .integer(let integer):
+            Double(integer)
+        case .real(let real):
+            real
+        case .bool(let bool):
+            bool ? 1 : 0
+        case .text(let text):
+            Double(text) ?? 0
+        case .null, nil:
+            0
+        }
+    }
+
+    private static func displayValue(_ value: WorkspaceAppStorageValue?) -> String {
+        switch value {
+        case .text(let text):
+            text.isEmpty ? "Blank" : text
+        case .integer(let integer):
+            "\(integer)"
+        case .real(let real):
+            formattedNumber(real)
+        case .bool(let bool):
+            bool ? "true" : "false"
+        case .null, nil:
+            "Blank"
+        }
+    }
+
+    private static func formattedNumber(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)))
     }
 }
 

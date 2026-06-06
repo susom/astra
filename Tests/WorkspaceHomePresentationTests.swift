@@ -267,6 +267,79 @@ struct WorkspaceHomePresentationTests {
         }
     }
 
+    @Test("Workspace app native surface renders storage backed metrics and charts")
+    func workspaceAppNativeSurfaceRendersStorageBackedMetricsAndCharts() throws {
+        let manifest = WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(id: "grocery", name: "Grocery"),
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "purchases", columns: [
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                    WorkspaceAppStorageColumn(name: "store", type: "text"),
+                    WorkspaceAppStorageColumn(name: "price", type: "double")
+                ])
+            ]),
+            views: [
+                WorkspaceAppViewSpec(
+                    id: "dashboard",
+                    type: "dashboard",
+                    title: "Dashboard",
+                    table: "purchases",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "purchase_count",
+                            type: "metric",
+                            label: "Purchases",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "total_spend",
+                            type: "metric",
+                            label: "Total spend",
+                            field: "price",
+                            aggregation: "sum"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "spend_by_store",
+                            type: "chart",
+                            label: "Spend by store",
+                            field: "price",
+                            groupBy: "store",
+                            aggregation: "sum"
+                        )
+                    ]
+                )
+            ]
+        )
+        let snapshot = WorkspaceAppStorageTableSnapshot(
+            name: "purchases",
+            columns: ["id", "store", "price"],
+            rows: [
+                ["id": .text("1"), "store": .text("Market"), "price": .real(12.50)],
+                ["id": .text("2"), "store": .text("Market"), "price": .real(7.25)],
+                ["id": .text("3"), "store": .text("Corner"), "price": .integer(5)]
+            ],
+            errorMessage: nil
+        )
+
+        let surface = WorkspaceAppNativeSurfaceBuilder.presentation(
+            manifest: manifest,
+            storageTables: [snapshot]
+        )
+
+        #expect(surface.metrics.map(\.id) == ["purchase_count", "total_spend"])
+        #expect(surface.metrics[0].value == "3")
+        #expect(surface.metrics[0].detail == "purchases records")
+        #expect(surface.metrics[1].value == "24.75")
+        #expect(surface.metrics[1].detail == "purchases.price")
+
+        let chart = try #require(surface.charts.first)
+        #expect(chart.label == "Spend by store")
+        #expect(chart.bars.map(\.label) == ["Market", "Corner"])
+        #expect(chart.bars.map(\.displayValue) == ["19.75", "5"])
+        #expect(chart.bars[0].fraction == 1)
+        #expect(chart.bars[1].fraction > 0)
+    }
+
     @Test("App Studio turns a local database intent into a valid publishable draft")
     func appStudioBuildsValidLocalDatabaseDraft() {
         let workspace = Workspace(name: "Household", primaryPath: "/tmp/household")
@@ -281,6 +354,12 @@ struct WorkspaceHomePresentationTests {
         #expect(draft.manifest.app.id == "grocery-tracker")
         #expect(draft.manifest.storage?.tables.map(\.name) == ["items", "shopping_lists", "purchases"])
         #expect(draft.manifest.views.map(\.type).contains("dashboard"))
+        #expect(draft.manifest.views.contains { view in
+            view.widgets.contains { $0.type == "metric" && $0.aggregation == "sum" }
+        })
+        #expect(draft.manifest.views.contains { view in
+            view.widgets.contains { $0.type == "chart" && $0.groupBy == "store" }
+        })
         #expect(draft.manifest.actions.contains { $0.type == "appStorage.insert" })
         #expect(draft.manifest.permissions.defaultMode == .draftOnly)
     }
