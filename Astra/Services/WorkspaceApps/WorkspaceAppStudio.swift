@@ -48,6 +48,32 @@ enum WorkspaceAppStudioBuilder {
         )
     }
 
+    static func draft(
+        from idea: WorkspaceAppStudioIdea,
+        workspace: Workspace
+    ) -> WorkspaceAppStudioDraft {
+        let manifest = manifest(for: idea)
+        let proposal = WorkspaceAppStudioProposal(
+            name: idea.name,
+            problem: idea.problem,
+            storage: idea.appStorage,
+            views: idea.mainViews,
+            actions: idea.actions,
+            automation: idea.automation,
+            riskMode: idea.riskMode
+        )
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+        return WorkspaceAppStudioDraft(
+            id: UUID(),
+            workspaceID: workspace.id,
+            sourceAppID: nil,
+            intent: idea.accelerationRationale,
+            proposal: proposal,
+            manifest: manifest,
+            validationReport: report
+        )
+    }
+
     static func manifestForPublishing(
         _ manifest: WorkspaceAppManifest,
         existingLogicalIDs: Set<String>
@@ -72,6 +98,19 @@ enum WorkspaceAppStudioBuilder {
             return localDatabaseManifest(intent: intent)
         }
         return operationalSurfaceManifest(intent: intent)
+    }
+
+    private static func manifest(for idea: WorkspaceAppStudioIdea) -> WorkspaceAppManifest {
+        if idea.id == "bq-redcap-reconciliation" {
+            return reconciliationManifest(for: idea)
+        }
+        if idea.id == "pipeline-review-queue" {
+            return pipelineReviewQueueManifest(for: idea)
+        }
+        if idea.id == "weekly-report-generator" {
+            return reportGeneratorManifest(for: idea)
+        }
+        return operationalSurfaceManifest(intent: idea.name)
     }
 
     private static func proposal(
@@ -245,6 +284,249 @@ enum WorkspaceAppStudioBuilder {
                 reads: ["workspace.context", "appStorage.records"],
                 writes: ["appStorage.records", "task.drafts"],
                 defaultMode: .draftOnly
+            )
+        )
+    }
+
+    private static func reconciliationManifest(for idea: WorkspaceAppStudioIdea) -> WorkspaceAppManifest {
+        WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(
+                id: idea.id,
+                name: idea.name,
+                icon: "checklist.checked",
+                description: idea.problem,
+                tags: ["reconciliation", "redcap", "bigquery"],
+                archetypes: ["Reconciliation App", "Dashboard", "Review Queue"]
+            ),
+            requirements: [
+                WorkspaceAppRequirement(
+                    id: "sourceWarehouse",
+                    contract: "tabularQuery.read",
+                    minVersion: "1.0.0",
+                    operations: ["describeTable", "runReadOnlyQuery"],
+                    providerHint: "bigQuery",
+                    dataClass: "sensitive"
+                ),
+                WorkspaceAppRequirement(
+                    id: "targetRecords",
+                    contract: "recordProject.read",
+                    minVersion: "1.0.0",
+                    operations: ["describeProject", "readRecords", "validateRecord"],
+                    providerHint: "redcap",
+                    dataClass: "sensitive"
+                )
+            ],
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "review_items", columns: [
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                    WorkspaceAppStorageColumn(name: "source_record_id", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "match_status", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "notes", type: "text")
+                ])
+            ]),
+            sources: [
+                WorkspaceAppSource(
+                    id: "latest_candidates",
+                    requirementRef: "sourceWarehouse",
+                    operation: "runReadOnlyQuery",
+                    mode: "read",
+                    query: "SELECT * FROM clinical.enrollment_candidates ORDER BY updated_at DESC LIMIT 100"
+                ),
+                WorkspaceAppSource(
+                    id: "redcap_records",
+                    requirementRef: "targetRecords",
+                    operation: "readRecords",
+                    mode: "read",
+                    projectRef: "enrollment-study"
+                )
+            ],
+            views: [
+                WorkspaceAppViewSpec(
+                    id: "dashboard",
+                    type: "dashboard",
+                    title: "Reconciliation Dashboard",
+                    table: "review_items",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "review_count",
+                            type: "metric",
+                            label: "Records to review",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "status_chart",
+                            type: "chart",
+                            label: "Records by status",
+                            groupBy: "match_status",
+                            aggregation: "count"
+                        )
+                    ]
+                ),
+                WorkspaceAppViewSpec(id: "exceptions", type: "reviewQueue", title: "Exceptions", table: "review_items")
+            ],
+            actions: [
+                WorkspaceAppActionSpec(id: "refresh", type: "pipeline.run", label: "Refresh"),
+                WorkspaceAppActionSpec(
+                    id: "create_review_task",
+                    type: "task.createDraft",
+                    label: "Create Review Task",
+                    taskTitle: "Review missing REDCap records",
+                    taskGoal: "Review missing or ambiguous REDCap records from the reconciliation app and recommend follow-up."
+                ),
+                WorkspaceAppActionSpec(
+                    id: "export_missing",
+                    type: "artifact.export",
+                    label: "Export Missing Records",
+                    table: "review_items",
+                    exportFormat: "csv"
+                )
+            ],
+            automations: [
+                WorkspaceAppAutomationSpec(id: "daily_refresh", type: "schedule", action: "refresh")
+            ],
+            permissions: WorkspaceAppPermissions(
+                reads: ["tabularQuery.read", "recordProject.read"],
+                writes: ["appStorage.records", "task.drafts"],
+                defaultMode: idea.riskMode
+            )
+        )
+    }
+
+    private static func pipelineReviewQueueManifest(for idea: WorkspaceAppStudioIdea) -> WorkspaceAppManifest {
+        WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(
+                id: idea.id,
+                name: idea.name,
+                icon: "arrow.triangle.branch",
+                description: idea.problem,
+                tags: ["pipeline", "review"],
+                archetypes: ["Pipeline", "Review Queue"]
+            ),
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "pipeline_items", columns: [
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                    WorkspaceAppStorageColumn(name: "step", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "status", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "owner", type: "text"),
+                    WorkspaceAppStorageColumn(name: "updated_at", type: "datetime")
+                ])
+            ]),
+            sources: [
+                WorkspaceAppSource(id: "workspace_process", mode: "read", sourceRef: "conversation")
+            ],
+            views: [
+                WorkspaceAppViewSpec(
+                    id: "pipeline_overview",
+                    type: "pipelineRun",
+                    title: "Pipeline Overview",
+                    table: "pipeline_items",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "step_count",
+                            type: "metric",
+                            label: "Tracked steps",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "status_breakdown",
+                            type: "chart",
+                            label: "Steps by status",
+                            groupBy: "status",
+                            aggregation: "count"
+                        )
+                    ]
+                ),
+                WorkspaceAppViewSpec(id: "approval_queue", type: "reviewQueue", title: "Approval Queue", table: "pipeline_items")
+            ],
+            actions: [
+                WorkspaceAppActionSpec(id: "run_pipeline", type: "pipeline.run", label: "Run Pipeline"),
+                WorkspaceAppActionSpec(
+                    id: "create_followup_task",
+                    type: "task.createDraft",
+                    label: "Create Follow-up Task",
+                    taskTitle: "Follow up on pipeline exception",
+                    taskGoal: "Review the selected pipeline exception, identify the blocker, and draft the next action."
+                )
+            ],
+            automations: [
+                WorkspaceAppAutomationSpec(id: "weekday_monitor", type: "monitor", action: "run_pipeline")
+            ],
+            permissions: WorkspaceAppPermissions(
+                reads: ["workspace.context", "appStorage.records"],
+                writes: ["appStorage.records", "task.drafts"],
+                defaultMode: idea.riskMode
+            )
+        )
+    }
+
+    private static func reportGeneratorManifest(for idea: WorkspaceAppStudioIdea) -> WorkspaceAppManifest {
+        WorkspaceAppManifest(
+            app: WorkspaceAppManifestMetadata(
+                id: idea.id,
+                name: idea.name,
+                icon: "doc.text.magnifyingglass",
+                description: idea.problem,
+                tags: ["report", "artifact"],
+                archetypes: ["Report Generator", "Dashboard"]
+            ),
+            storage: WorkspaceAppStorageSchema(tables: [
+                WorkspaceAppStorageTable(name: "report_runs", columns: [
+                    WorkspaceAppStorageColumn(name: "id", type: "uuid", primaryKey: true, required: true),
+                    WorkspaceAppStorageColumn(name: "period", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "status", type: "text", required: true),
+                    WorkspaceAppStorageColumn(name: "artifact_path", type: "text")
+                ])
+            ]),
+            sources: [
+                WorkspaceAppSource(id: "workspace_artifacts", mode: "read", sourceRef: "artifacts")
+            ],
+            views: [
+                WorkspaceAppViewSpec(
+                    id: "report_dashboard",
+                    type: "dashboard",
+                    title: "Report Dashboard",
+                    table: "report_runs",
+                    widgets: [
+                        WorkspaceAppWidgetSpec(
+                            id: "report_count",
+                            type: "metric",
+                            label: "Reports",
+                            aggregation: "count"
+                        ),
+                        WorkspaceAppWidgetSpec(
+                            id: "report_status",
+                            type: "chart",
+                            label: "Reports by status",
+                            groupBy: "status",
+                            aggregation: "count"
+                        )
+                    ]
+                ),
+                WorkspaceAppViewSpec(id: "report_history", type: "table", title: "Report History", table: "report_runs")
+            ],
+            actions: [
+                WorkspaceAppActionSpec(
+                    id: "draft_report_task",
+                    type: "task.createDraft",
+                    label: "Draft Report Task",
+                    taskTitle: "Generate workspace report",
+                    taskGoal: "Compile selected workspace records and artifacts into a concise report draft."
+                ),
+                WorkspaceAppActionSpec(
+                    id: "export_report_runs",
+                    type: "artifact.export",
+                    label: "Export Report Runs",
+                    table: "report_runs",
+                    exportFormat: "json"
+                )
+            ],
+            automations: [
+                WorkspaceAppAutomationSpec(id: "weekly_report", type: "schedule", action: "draft_report_task")
+            ],
+            permissions: WorkspaceAppPermissions(
+                reads: ["workspace.context", "task.artifacts", "appStorage.records"],
+                writes: ["appStorage.records", "task.drafts"],
+                defaultMode: idea.riskMode
             )
         )
     }

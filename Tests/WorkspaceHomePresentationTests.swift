@@ -594,4 +594,54 @@ struct WorkspaceHomePresentationTests {
         #expect(manifest.app.id == "grocery-tracker-3")
         #expect(manifest.app.name == "Grocery Tracker 3")
     }
+
+    @Test("App Studio ideates reconciliation apps from BigQuery and REDCap context")
+    func appStudioIdeatesReconciliationAppsFromContext() {
+        let ideas = WorkspaceAppStudioIdeator.proposals(
+            for: WorkspaceAppStudioIdeationContext(
+                userRequest: "Build me an app to show latest records from BigQuery and check REDCap.",
+                conversationExcerpts: [
+                    "We compare clinical.enrollment_candidates against the Enrollment REDCap project."
+                ],
+                capabilityNames: ["BigQuery", "REDCap"]
+            )
+        )
+
+        #expect(ideas.map(\.id) == [
+            "bq-redcap-reconciliation",
+            "pipeline-review-queue",
+            "weekly-report-generator"
+        ])
+        #expect(ideas[0].requiredSources.contains("BigQuery table"))
+        #expect(ideas[0].requiredSources.contains("REDCap project"))
+        #expect(ideas[0].appStorage == ["review_items"])
+        #expect(ideas[0].actions.contains("Create Review Task"))
+        #expect(ideas[0].automation == ["Daily refresh disabled until approved"])
+        #expect(ideas[0].riskMode == .readOnly)
+    }
+
+    @Test("App Studio converts a selected ideation proposal into a valid manifest")
+    func appStudioConvertsSelectedIdeaIntoValidManifest() throws {
+        let workspace = Workspace(name: "Clinical Ops", primaryPath: "/tmp/clinical-ops")
+        let idea = try #require(WorkspaceAppStudioIdeator.proposals(
+            for: WorkspaceAppStudioIdeationContext(
+                userRequest: "Based on the conversation we had, ideate a pipeline app to speed up this process.",
+                conversationExcerpts: [
+                    "Repeated steps include data quality checks, exception review, approval, and report generation."
+                ]
+            )
+        ).first)
+
+        let draft = WorkspaceAppStudioBuilder.draft(from: idea, workspace: workspace)
+
+        #expect(draft.workspaceID == workspace.id)
+        #expect(draft.canPublish)
+        #expect(draft.manifest.app.id == "pipeline-review-queue")
+        #expect(draft.manifest.views.map(\.type).contains("pipelineRun"))
+        #expect(draft.manifest.views.map(\.type).contains("reviewQueue"))
+        #expect(draft.manifest.actions.contains { $0.type == "pipeline.run" })
+        #expect(draft.manifest.actions.contains { $0.type == "task.createDraft" && $0.taskGoal?.isEmpty == false })
+        #expect(draft.manifest.automations.first?.enabledByDefault == false)
+        #expect(draft.manifest.permissions.defaultMode == .draftOnly)
+    }
 }

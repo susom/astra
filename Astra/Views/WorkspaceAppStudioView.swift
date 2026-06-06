@@ -9,6 +9,7 @@ struct WorkspaceAppStudioView: View {
 
     @State private var intent: String
     @State private var draft: WorkspaceAppStudioDraft
+    @State private var ideas: [WorkspaceAppStudioIdea] = []
     @State private var statusMessage = ""
 
     init(
@@ -39,6 +40,7 @@ struct WorkspaceAppStudioView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     intentSection
+                    ideasSection
                     proposalSection
                     validationSection
                     manifestSection
@@ -111,10 +113,34 @@ struct WorkspaceAppStudioView: View {
                 }
                 .buttonStyle(.bordered)
 
+                Button(action: generateIdeas) {
+                    Label("Ideate", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+
                 if !statusMessage.isEmpty {
                     Text(statusMessage)
                         .font(Stanford.caption(12))
                         .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var ideasSection: some View {
+        if !ideas.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                sectionHeader("Ideas", count: ideas.count)
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 260, maximum: 360), spacing: 10, alignment: .top)],
+                    alignment: .leading,
+                    spacing: 10
+                ) {
+                    ForEach(ideas) { idea in
+                        ideaCard(idea)
+                    }
                 }
             }
         }
@@ -204,6 +230,56 @@ struct WorkspaceAppStudioView: View {
             }
             Spacer()
         }
+    }
+
+    private func ideaCard(_ idea: WorkspaceAppStudioIdea) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(idea.name)
+                    .font(Stanford.ui(13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 8)
+
+                Text(idea.riskMode.rawValue)
+                    .font(Stanford.caption(10).weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Text(idea.problem)
+                .font(Stanford.caption(12))
+                .foregroundStyle(.secondary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(idea.accelerationRationale)
+                .font(Stanford.caption(11))
+                .foregroundStyle(.primary)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Label("\(idea.requiredSources.count)", systemImage: "point.3.connected.trianglepath.dotted")
+                Label("\(idea.actions.count)", systemImage: "play.circle")
+                Label("\(idea.automation.count)", systemImage: "clock")
+                Spacer()
+                Button("Use", action: { useIdea(idea) })
+                    .buttonStyle(.borderless)
+            }
+            .font(Stanford.caption(11))
+            .foregroundStyle(.secondary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 152, alignment: .topLeading)
+        .background(Color.primary.opacity(0.025))
+        .clipShape(RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: WorkspaceAppsPresentation.cardCornerRadius, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private func proposalCard(title: String, values: [String], icon: String) -> some View {
@@ -299,6 +375,17 @@ struct WorkspaceAppStudioView: View {
             existingManifest: existingManifest
         )
         statusMessage = "Draft regenerated."
+    }
+
+    private func generateIdeas() {
+        ideas = WorkspaceAppStudioIdeator.proposals(for: WorkspaceAppStudioIdeationContext(userRequest: intent))
+        statusMessage = "\(ideas.count) ideas generated."
+    }
+
+    private func useIdea(_ idea: WorkspaceAppStudioIdea) {
+        draft = WorkspaceAppStudioBuilder.draft(from: idea, workspace: workspace)
+        intent = idea.accelerationRationale
+        statusMessage = "Idea converted to draft."
     }
 
     private func publishDraft() {
