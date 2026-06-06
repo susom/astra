@@ -467,6 +467,43 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid utility action payloads")
+    func validationRejectsInvalidUtilityActionPayloads() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "open_file",
+                type: "url.open",
+                label: "Open File",
+                targetURL: "file:///Users/alvaro1/private.csv"
+            ),
+            WorkspaceAppActionSpec(
+                id: "copy_blank",
+                type: "clipboard.copy",
+                label: "Copy Blank",
+                clipboardText: " "
+            ),
+            WorkspaceAppActionSpec(
+                id: "notify_blank",
+                type: "notification.show",
+                label: "Notify Blank"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/targetURL" && $0.message.contains("http or https")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/1/clipboardText" && $0.message.contains("text to copy")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/2/notificationTitle" && $0.message.contains("title or body")
+        })
+    }
+
     @Test("manifest validation rejects capability reads without declared sources")
     func validationRejectsCapabilityReadsWithoutDeclaredSources() {
         var manifest = Self.reconciliationManifest()

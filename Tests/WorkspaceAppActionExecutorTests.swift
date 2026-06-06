@@ -257,6 +257,54 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("utility actions open URLs copy clipboard text and show notifications through audited client")
+    func utilityActionsOpenURLsCopyClipboardTextAndShowNotificationsThroughAuditedClient() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let utilityClient = MockWorkspaceAppUtilityActionClient()
+        let executor = WorkspaceAppActionExecutor(utilityActionClient: utilityClient)
+
+        let urlResult = try executor.execute(
+            actionID: "openDashboard",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+        let clipboardResult = try executor.execute(
+            actionID: "copySummary",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+        let notificationResult = try executor.execute(
+            actionID: "showReminder",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            modelContext: fixture.context
+        )
+
+        #expect(utilityClient.openedURLs == [URL(string: "https://example.com/grocery")])
+        #expect(utilityClient.clipboardTexts == ["Grocery review ready"])
+        #expect(utilityClient.notifications == [
+            MockWorkspaceAppUtilityActionClient.Notification(
+                title: "Review ready",
+                body: "Open the review queue before shopping."
+            )
+        ])
+        #expect(urlResult.outputSummary == "Opened https://example.com/grocery.")
+        #expect(clipboardResult.outputSummary == "Copied 20 characters to the clipboard.")
+        #expect(notificationResult.outputSummary == "Showed notification 'Review ready'.")
+
+        let events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+        #expect(events.contains { $0.type == "workspaceApp.url.opened" && $0.payload.contains("example.com") && $0.payload.contains("grocery") })
+        #expect(events.contains { $0.type == "workspaceApp.clipboard.copied" && $0.payload.contains("\"characterCount\":20") })
+        #expect(events.contains { $0.type == "workspaceApp.notification.shown" && $0.payload.contains("Review ready") })
+    }
+
+    @MainActor
     @Test("task create and run actions queue linked AgentTasks")
     func taskCreateAndRunActionsQueueLinkedAgentTasks() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .preApproved)
@@ -999,6 +1047,25 @@ struct WorkspaceAppActionExecutorTests {
                     exportFormat: "csv"
                 ),
                 WorkspaceAppActionSpec(
+                    id: "openDashboard",
+                    type: "url.open",
+                    label: "Open Dashboard",
+                    targetURL: "https://example.com/grocery"
+                ),
+                WorkspaceAppActionSpec(
+                    id: "copySummary",
+                    type: "clipboard.copy",
+                    label: "Copy Summary",
+                    clipboardText: "Grocery review ready"
+                ),
+                WorkspaceAppActionSpec(
+                    id: "showReminder",
+                    type: "notification.show",
+                    label: "Show Reminder",
+                    notificationTitle: "Review ready",
+                    notificationBody: "Open the review queue before shopping."
+                ),
+                WorkspaceAppActionSpec(
                     id: "exportPipeline",
                     type: "pipeline.run",
                     label: "Export Pipeline",
@@ -1082,6 +1149,29 @@ private struct MockWorkspaceAppCapabilityWriteClient: WorkspaceAppCapabilityWrit
         input: WorkspaceAppActionInput
     ) throws -> WorkspaceAppCapabilityWriteResult {
         result
+    }
+}
+
+private final class MockWorkspaceAppUtilityActionClient: WorkspaceAppUtilityActionClient {
+    struct Notification: Equatable {
+        var title: String
+        var body: String
+    }
+
+    var openedURLs: [URL] = []
+    var clipboardTexts: [String] = []
+    var notifications: [Notification] = []
+
+    func openURL(_ url: URL) {
+        openedURLs.append(url)
+    }
+
+    func copyToClipboard(_ text: String) {
+        clipboardTexts.append(text)
+    }
+
+    func showNotification(title: String, body: String) {
+        notifications.append(Notification(title: title, body: body))
     }
 }
 

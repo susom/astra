@@ -283,6 +283,10 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var sourceRef: String?
     var table: String?
     var exportFormat: String?
+    var targetURL: String?
+    var clipboardText: String?
+    var notificationTitle: String?
+    var notificationBody: String?
     var taskTitle: String?
     var taskGoal: String?
     var approvalPrompt: String?
@@ -307,6 +311,10 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         case sourceRef
         case table
         case exportFormat
+        case targetURL
+        case clipboardText
+        case notificationTitle
+        case notificationBody
         case taskTitle
         case taskGoal
         case approvalPrompt
@@ -332,6 +340,10 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         sourceRef: String? = nil,
         table: String? = nil,
         exportFormat: String? = nil,
+        targetURL: String? = nil,
+        clipboardText: String? = nil,
+        notificationTitle: String? = nil,
+        notificationBody: String? = nil,
         taskTitle: String? = nil,
         taskGoal: String? = nil,
         approvalPrompt: String? = nil,
@@ -355,6 +367,10 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.sourceRef = sourceRef
         self.table = table
         self.exportFormat = exportFormat
+        self.targetURL = targetURL
+        self.clipboardText = clipboardText
+        self.notificationTitle = notificationTitle
+        self.notificationBody = notificationBody
         self.taskTitle = taskTitle
         self.taskGoal = taskGoal
         self.approvalPrompt = approvalPrompt
@@ -381,6 +397,10 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         sourceRef = try container.decodeIfPresent(String.self, forKey: .sourceRef)
         table = try container.decodeIfPresent(String.self, forKey: .table)
         exportFormat = try container.decodeIfPresent(String.self, forKey: .exportFormat)
+        targetURL = try container.decodeIfPresent(String.self, forKey: .targetURL)
+        clipboardText = try container.decodeIfPresent(String.self, forKey: .clipboardText)
+        notificationTitle = try container.decodeIfPresent(String.self, forKey: .notificationTitle)
+        notificationBody = try container.decodeIfPresent(String.self, forKey: .notificationBody)
         taskTitle = try container.decodeIfPresent(String.self, forKey: .taskTitle)
         taskGoal = try container.decodeIfPresent(String.self, forKey: .taskGoal)
         approvalPrompt = try container.decodeIfPresent(String.self, forKey: .approvalPrompt)

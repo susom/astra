@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftData
 
@@ -13,6 +14,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingTaskGoal
     case missingPipelineSteps(String)
     case unsupportedExportFormat(String)
+    case invalidUtilityAction(String)
     case approvalRequired(String)
     case agentRecommendationRequired(String)
     case gateBlocked(String)
@@ -44,6 +46,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app pipeline action '\(actionID)' must declare at least one step."
         case .unsupportedExportFormat(let format):
             "Workspace app artifact export format '\(format)' is not supported."
+        case .invalidUtilityAction(let message):
+            message
         case .approvalRequired(let actionID):
             "Workspace app gate '\(actionID)' requires human approval before execution can continue."
         case .agentRecommendationRequired(let actionID):
@@ -127,6 +131,30 @@ struct WorkspaceAppUnavailableCapabilityWriteClient: WorkspaceAppCapabilityWrite
         input: WorkspaceAppActionInput
     ) throws -> WorkspaceAppCapabilityWriteResult {
         throw WorkspaceAppActionExecutionError.capabilityWriteUnavailable(action.id)
+    }
+}
+
+protocol WorkspaceAppUtilityActionClient {
+    func openURL(_ url: URL)
+    func copyToClipboard(_ text: String)
+    func showNotification(title: String, body: String)
+}
+
+struct WorkspaceAppDefaultUtilityActionClient: WorkspaceAppUtilityActionClient {
+    func openURL(_ url: URL) {
+        NSWorkspace.shared.open(url)
+    }
+
+    func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    func showNotification(title: String, body: String) {
+        AppLogger.info(
+            "Workspace app notification requested: \(title) (\(body.count) body characters)",
+            category: "WorkspaceApps"
+        )
     }
 }
 
@@ -220,6 +248,7 @@ struct WorkspaceAppActionExecutor {
     var storageService = WorkspaceAppStorageService()
     var sourceResolver = WorkspaceAppSourceResolver()
     var capabilityWriteClient: any WorkspaceAppCapabilityWriteClient = WorkspaceAppNativeCapabilityWriteClient()
+    var utilityActionClient: any WorkspaceAppUtilityActionClient = WorkspaceAppDefaultUtilityActionClient()
     var recorder = WorkspaceAppRunRecorder()
 
     @MainActor
@@ -456,6 +485,12 @@ struct WorkspaceAppActionExecutor {
                 nil,
                 artifactURL.path
             )
+        case "notification.show":
+            return try executeShowNotification(action: action, run: run, modelContext: modelContext)
+        case "url.open":
+            return try executeOpenURL(action: action, run: run, modelContext: modelContext)
+        case "clipboard.copy":
+            return try executeCopyToClipboard(action: action, run: run, modelContext: modelContext)
         case "task.createDraft":
             let task = try createTask(
                 action: action,
@@ -511,6 +546,92 @@ struct WorkspaceAppActionExecutor {
         default:
             throw WorkspaceAppActionExecutionError.unsupportedActionType(action.type)
         }
+    }
+
+    private func executeShowNotification(
+        action: WorkspaceAppActionSpec,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let title = normalized(action.notificationTitle, action.label, fallback: "")
+        let body = normalized(action.notificationBody, fallback: "")
+        guard !title.isEmpty || !body.isEmpty else {
+            throw WorkspaceAppActionExecutionError.invalidUtilityAction(
+                "Notification action '\(action.id)' must declare a title or body."
+            )
+        }
+        utilityActionClient.showNotification(title: title, body: body)
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.notification.shown",
+            payload: [
+                "actionID": .text(action.id),
+                "title": .text(title),
+                "bodyLength": .integer(Int64(body.count))
+            ],
+            modelContext: modelContext
+        )
+        return ([], "Showed notification '\(title.isEmpty ? action.id : title)'.", nil, nil)
+    }
+
+    private func executeOpenURL(
+        action: WorkspaceAppActionSpec,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let targetURL = normalized(action.targetURL, fallback: "")
+        guard let url = URL(string: targetURL),
+              let scheme = url.scheme?.lowercased(),
+              ["https", "http"].contains(scheme),
+              url.host?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else {
+            throw WorkspaceAppActionExecutionError.invalidUtilityAction(
+                "URL open action '\(action.id)' must declare an http or https URL."
+            )
+        }
+        utilityActionClient.openURL(url)
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.url.opened",
+            payload: ["actionID": .text(action.id), "url": .text(url.absoluteString)],
+            modelContext: modelContext
+        )
+        return ([], "Opened \(url.absoluteString).", nil, nil)
+    }
+
+    private func executeCopyToClipboard(
+        action: WorkspaceAppActionSpec,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let text = normalized(action.clipboardText, fallback: "")
+        guard !text.isEmpty else {
+            throw WorkspaceAppActionExecutionError.invalidUtilityAction(
+                "Clipboard copy action '\(action.id)' must declare text to copy."
+            )
+        }
+        utilityActionClient.copyToClipboard(text)
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.clipboard.copied",
+            payload: ["actionID": .text(action.id), "characterCount": .integer(Int64(text.count))],
+            modelContext: modelContext
+        )
+        return ([], "Copied \(text.count) characters to the clipboard.", nil, nil)
     }
 
     private func executeHumanApprovalGate(

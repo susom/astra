@@ -352,6 +352,30 @@ enum WorkspaceAppManifestValidator {
                !["csv", "json"].contains(format) {
                 issues.append(blocker("\(path)/exportFormat", "Artifact export format must be csv or json."))
             }
+            if action.type == "url.open" {
+                let targetURL = action.targetURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if targetURL.isEmpty {
+                    issues.append(blocker("\(path)/targetURL", "URL open action must declare a target URL."))
+                } else if let url = URL(string: targetURL),
+                          let scheme = url.scheme?.lowercased(),
+                          ["https", "http"].contains(scheme),
+                          url.host?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    // URL is supported.
+                } else {
+                    issues.append(blocker("\(path)/targetURL", "URL open action must use an http or https URL."))
+                }
+            }
+            if action.type == "clipboard.copy",
+               action.clipboardText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                issues.append(blocker("\(path)/clipboardText", "Clipboard copy action must declare text to copy."))
+            }
+            if action.type == "notification.show" {
+                let title = action.notificationTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let body = action.notificationBody?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if title.isEmpty && body.isEmpty {
+                    issues.append(blocker("\(path)/notificationTitle", "Notification action must declare a title or body."))
+                }
+            }
             if ["task.createDraft", "task.createAndRun"].contains(action.type),
                action.taskGoal?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
                 issues.append(blocker("\(path)/taskGoal", "Task action must declare a task goal."))
