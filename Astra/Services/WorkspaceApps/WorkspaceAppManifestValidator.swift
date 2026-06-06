@@ -42,14 +42,14 @@ enum WorkspaceAppManifestValidator {
         let requirementIDs = validateRequirements(manifest.requirements, issues: &issues)
         let storageTables = validateStorage(manifest.storage, issues: &issues)
         validateSources(manifest.sources, requirementIDs: requirementIDs, issues: &issues)
-        validateViews(manifest.views, storageTables: storageTables, issues: &issues)
-        validateActions(
+        let actionIDs = validateActions(
             manifest.actions,
             requirementIDs: requirementIDs,
             storageTables: storageTables,
             issues: &issues
         )
-        validateAutomations(manifest.automations, actionIDs: Set(manifest.actions.map(\.id)), issues: &issues)
+        validateViews(manifest.views, storageTables: storageTables, actionIDs: actionIDs, issues: &issues)
+        validateAutomations(manifest.automations, actionIDs: actionIDs, issues: &issues)
         validatePermissions(manifest.permissions, issues: &issues)
 
         return WorkspaceAppManifestValidationReport(issues: issues)
@@ -146,6 +146,7 @@ enum WorkspaceAppManifestValidator {
     private static func validateViews(
         _ views: [WorkspaceAppViewSpec],
         storageTables: [String: Set<String>],
+        actionIDs: Set<String>,
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
     ) {
         var seen = Set<String>()
@@ -182,6 +183,7 @@ enum WorkspaceAppManifestValidator {
                     path: widgetPath,
                     viewTable: view.table,
                     storageTables: storageTables,
+                    actionIDs: actionIDs,
                     issues: &issues
                 )
             }
@@ -193,6 +195,7 @@ enum WorkspaceAppManifestValidator {
         path: String,
         viewTable: String?,
         storageTables: [String: Set<String>],
+        actionIDs: Set<String>,
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
     ) {
         let table = widget.table ?? viewTable
@@ -209,8 +212,43 @@ enum WorkspaceAppManifestValidator {
             if let groupBy = widget.groupBy {
                 validateStorageFieldReference(groupBy, table: table, path: "\(path)/groupBy", storageTables: storageTables, issues: &issues)
             }
+        case "webView":
+            validateWebViewWidget(widget, path: path, actionIDs: actionIDs, issues: &issues)
         default:
             break
+        }
+    }
+
+    private static func validateWebViewWidget(
+        _ widget: WorkspaceAppWidgetSpec,
+        path: String,
+        actionIDs: Set<String>,
+        issues: inout [WorkspaceAppManifestValidationReport.Issue]
+    ) {
+        let allowedRenderers = Set(["mermaidDiagram", "htmlReport", "chartComposite"])
+        let renderer = widget.webRenderer?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if renderer.isEmpty {
+            issues.append(blocker("\(path)/webRenderer", "WebView widget must declare an ASTRA-known renderer."))
+        } else if !allowedRenderers.contains(renderer) {
+            issues.append(blocker("\(path)/webRenderer", "WebView renderer '\(renderer)' is not allowed for Workspace Apps."))
+        }
+
+        for (actionIndex, actionID) in widget.allowedActions.enumerated() {
+            validateIdentifier(
+                actionID,
+                path: "\(path)/allowedActions/\(actionIndex)",
+                label: "WebView allowed action",
+                issues: &issues
+            )
+            if !actionIDs.contains(actionID) {
+                issues.append(blocker("\(path)/allowedActions/\(actionIndex)", "WebView widget references unknown action '\(actionID)'."))
+            }
+        }
+
+        for (assetIndex, asset) in widget.requiredAssets.enumerated() {
+            if !isPortableAssetPath(asset) {
+                issues.append(blocker("\(path)/requiredAssets/\(assetIndex)", "WebView asset path must be portable and relative."))
+            }
         }
     }
 
@@ -243,7 +281,7 @@ enum WorkspaceAppManifestValidator {
         requirementIDs: Set<String>,
         storageTables: [String: Set<String>],
         issues: inout [WorkspaceAppManifestValidationReport.Issue]
-    ) {
+    ) -> Set<String> {
         var seen = Set<String>()
         var actionIDs = Set<String>()
         for (index, action) in actions.enumerated() {
@@ -293,6 +331,7 @@ enum WorkspaceAppManifestValidator {
                 }
             }
         }
+        return actionIDs
     }
 
     private static func validateAutomations(
@@ -362,6 +401,13 @@ enum WorkspaceAppManifestValidator {
         if trimmed.rangeOfCharacter(from: allowed.inverted) != nil {
             issues.append(blocker(path, "\(label) may contain only letters, numbers, dot, underscore, or hyphen."))
         }
+    }
+
+    private static func isPortableAssetPath(_ path: String) -> Bool {
+        !path.isEmpty
+            && !path.hasPrefix("/")
+            && !path.contains("..")
+            && !path.contains("\\")
     }
 
     private static func blocker(_ path: String, _ message: String) -> WorkspaceAppManifestValidationReport.Issue {

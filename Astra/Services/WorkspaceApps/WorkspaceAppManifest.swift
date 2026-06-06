@@ -203,6 +203,22 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
     var field: String?
     var groupBy: String?
     var aggregation: String?
+    var webRenderer: String?
+    var allowedActions: [String]
+    var requiredAssets: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case table
+        case field
+        case groupBy
+        case aggregation
+        case webRenderer
+        case allowedActions
+        case requiredAssets
+    }
 
     init(
         id: String,
@@ -211,7 +227,10 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
         table: String? = nil,
         field: String? = nil,
         groupBy: String? = nil,
-        aggregation: String? = nil
+        aggregation: String? = nil,
+        webRenderer: String? = nil,
+        allowedActions: [String] = [],
+        requiredAssets: [String] = []
     ) {
         self.id = id
         self.type = type
@@ -220,6 +239,23 @@ struct WorkspaceAppWidgetSpec: Codable, Sendable, Equatable {
         self.field = field
         self.groupBy = groupBy
         self.aggregation = aggregation
+        self.webRenderer = webRenderer
+        self.allowedActions = allowedActions
+        self.requiredAssets = requiredAssets
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        type = try container.decode(String.self, forKey: .type)
+        label = try container.decode(String.self, forKey: .label)
+        table = try container.decodeIfPresent(String.self, forKey: .table)
+        field = try container.decodeIfPresent(String.self, forKey: .field)
+        groupBy = try container.decodeIfPresent(String.self, forKey: .groupBy)
+        aggregation = try container.decodeIfPresent(String.self, forKey: .aggregation)
+        webRenderer = try container.decodeIfPresent(String.self, forKey: .webRenderer)
+        allowedActions = try container.decodeIfPresent([String].self, forKey: .allowedActions) ?? []
+        requiredAssets = try container.decodeIfPresent([String].self, forKey: .requiredAssets) ?? []
     }
 }
 

@@ -87,6 +87,91 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation restricts WebView widgets")
+    func validationRestrictsWebViewWidgets() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(id: "export_missing", type: "artifact.export", table: "review_items")
+        ]
+        manifest.views = [
+            WorkspaceAppViewSpec(
+                id: "diagram",
+                type: "dashboard",
+                title: "Diagram",
+                widgets: [
+                    WorkspaceAppWidgetSpec(
+                        id: "unsafe_widget",
+                        type: "webView",
+                        label: "Unsafe",
+                        webRenderer: "customJavaScript",
+                        allowedActions: ["missing_action"],
+                        requiredAssets: ["/Users/alvaro/private.js"]
+                    )
+                ]
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/webRenderer" && $0.message.contains("not allowed")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/allowedActions/0" && $0.message.contains("unknown action")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/views/0/widgets/0/requiredAssets/0" && $0.message.contains("portable")
+        })
+    }
+
+    @Test("WebView bridge only accepts declared widget action requests")
+    func webViewBridgeOnlyAcceptsDeclaredWidgetActions() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(id: "export_missing", type: "artifact.export", table: "review_items"),
+            WorkspaceAppActionSpec(id: "create_review", type: "task.createDraft", taskGoal: "Review missing records.")
+        ]
+        manifest.views = [
+            WorkspaceAppViewSpec(
+                id: "diagram",
+                type: "dashboard",
+                title: "Diagram",
+                widgets: [
+                    WorkspaceAppWidgetSpec(
+                        id: "reconciliation_flow",
+                        type: "webView",
+                        label: "Flow",
+                        webRenderer: "mermaidDiagram",
+                        allowedActions: ["export_missing"],
+                        requiredAssets: ["web/reconciliation.mmd"]
+                    )
+                ]
+            )
+        ]
+
+        let allowed = WorkspaceAppWebViewBridge.validate(
+            WorkspaceAppWebViewBridgeRequest(widgetID: "reconciliation_flow", actionID: "export_missing"),
+            manifest: manifest
+        )
+        let blockedAction = WorkspaceAppWebViewBridge.validate(
+            WorkspaceAppWebViewBridgeRequest(widgetID: "reconciliation_flow", actionID: "create_review"),
+            manifest: manifest
+        )
+        let blockedWidget = WorkspaceAppWebViewBridge.validate(
+            WorkspaceAppWebViewBridgeRequest(widgetID: "missing_widget", actionID: "export_missing"),
+            manifest: manifest
+        )
+
+        #expect(WorkspaceAppManifestValidator.validate(manifest).isValid)
+        #expect(allowed.isAllowed)
+        #expect(allowed.action?.id == "export_missing")
+        #expect(!blockedAction.isAllowed)
+        #expect(blockedAction.issue?.message.contains("not allowed") == true)
+        #expect(!blockedWidget.isAllowed)
+        #expect(blockedWidget.issue?.message.contains("Unknown WebView widget") == true)
+    }
+
     @Test("manifest validation rejects task draft actions without a goal")
     func validationRejectsTaskDraftActionsWithoutGoal() {
         var manifest = Self.reconciliationManifest()
