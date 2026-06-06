@@ -330,6 +330,21 @@ enum WorkspaceAppManifestValidator {
                     )
                 }
             }
+            if action.type == "gate.expression" {
+                if action.gateField?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                    issues.append(blocker("\(path)/gateField", "Expression gate must declare a field to evaluate."))
+                }
+                let normalizedOperator = action.gateOperator?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if normalizedOperator.isEmpty {
+                    issues.append(blocker("\(path)/gateOperator", "Expression gate must declare an operator."))
+                } else if !WorkspaceAppExpressionGateOperator.allRawValues.contains(normalizedOperator) {
+                    issues.append(blocker("\(path)/gateOperator", "Expression gate operator '\(normalizedOperator)' is not supported."))
+                }
+                if WorkspaceAppExpressionGateOperator.requiresExpectedValue(normalizedOperator),
+                   action.gateValue == nil {
+                    issues.append(blocker("\(path)/gateValue", "Expression gate operator '\(normalizedOperator)' must declare a comparison value."))
+                }
+            }
         }
 
         for (index, action) in actions.enumerated() where action.type == "pipeline.run" {

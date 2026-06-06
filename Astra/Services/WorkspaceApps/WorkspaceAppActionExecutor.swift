@@ -11,6 +11,7 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
     case missingPipelineSteps(String)
     case unsupportedExportFormat(String)
     case approvalRequired(String)
+    case gateBlocked(String)
     case permissionDenied(String)
     case storageFailed(String)
 
@@ -34,6 +35,8 @@ enum WorkspaceAppActionExecutionError: LocalizedError, Equatable {
             "Workspace app artifact export format '\(format)' is not supported."
         case .approvalRequired(let actionID):
             "Workspace app approval gate '\(actionID)' requires human approval before execution can continue."
+        case .gateBlocked(let actionID):
+            "Workspace app expression gate '\(actionID)' blocked execution."
         case .permissionDenied(let message):
             message
         case .storageFailed(let message):
@@ -381,6 +384,13 @@ struct WorkspaceAppActionExecutor {
                 run: run,
                 modelContext: modelContext
             )
+        case "gate.expression":
+            return try executeExpressionGate(
+                action: action,
+                input: input,
+                run: run,
+                modelContext: modelContext
+            )
         case "pipeline.run":
             return try executePipeline(
                 action: action,
@@ -431,6 +441,58 @@ struct WorkspaceAppActionExecutor {
             modelContext: modelContext
         )
         return ([], "Approval gate '\(action.id)' confirmed.", nil, nil)
+    }
+
+    private func executeExpressionGate(
+        action: WorkspaceAppActionSpec,
+        input: WorkspaceAppActionInput,
+        run: WorkspaceAppRun,
+        modelContext: ModelContext
+    ) throws -> (
+        rows: [[String: WorkspaceAppStorageValue]],
+        outputSummary: String,
+        linkedTaskID: UUID?,
+        linkedArtifactPath: String?
+    ) {
+        let field = action.gateField?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !field.isEmpty,
+              let gateOperator = WorkspaceAppExpressionGateOperator(
+                rawValue: action.gateOperator?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+              ) else {
+            throw WorkspaceAppActionExecutionError.gateBlocked(action.id)
+        }
+
+        let actualValue = input.record[field]
+        let passed = evaluateExpressionGate(
+            gateOperator: gateOperator,
+            actualValue: actualValue,
+            expectedValue: action.gateValue
+        )
+        let eventPayload: [String: WorkspaceAppStorageValue] = [
+            "actionID": .text(action.id),
+            "field": .text(field),
+            "operator": .text(gateOperator.rawValue),
+            "actualValue": .text(describeGateValue(actualValue)),
+            "expectedValue": .text(describeGateValue(action.gateValue))
+        ]
+
+        if !passed {
+            recorder.recordEvent(
+                run: run,
+                type: "workspaceApp.gate.blocked",
+                payload: eventPayload,
+                modelContext: modelContext
+            )
+            throw WorkspaceAppActionExecutionError.gateBlocked(action.id)
+        }
+
+        recorder.recordEvent(
+            run: run,
+            type: "workspaceApp.gate.passed",
+            payload: eventPayload,
+            modelContext: modelContext
+        )
+        return ([], "Expression gate '\(action.id)' passed.", nil, nil)
     }
 
     private func executePipeline(
@@ -656,7 +718,7 @@ struct WorkspaceAppActionExecutor {
 
     private func effect(for actionType: String) -> WorkspaceAppContractEffect {
         switch actionType {
-        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run", "gate.humanApproval":
+        case "appStorage.query", "capability.read", "task.open", "artifact.open", "artifact.export", "url.open", "clipboard.copy", "pipeline.run", "gate.humanApproval", "gate.expression":
             .read
         case "appStorage.insert", "appStorage.update", "notification.show", "task.createDraft":
             .localWrite
@@ -683,7 +745,80 @@ struct WorkspaceAppActionExecutor {
         if case WorkspaceAppActionExecutionError.approvalRequired = error {
             return true
         }
+        if case WorkspaceAppActionExecutionError.gateBlocked = error {
+            return true
+        }
         return false
+    }
+
+    private func evaluateExpressionGate(
+        gateOperator: WorkspaceAppExpressionGateOperator,
+        actualValue: WorkspaceAppStorageValue?,
+        expectedValue: WorkspaceAppStorageValue?
+    ) -> Bool {
+        switch gateOperator {
+        case .exists:
+            return actualValue != nil && actualValue != .null
+        case .notExists:
+            return actualValue == nil || actualValue == .null
+        case .equals:
+            return actualValue == expectedValue
+        case .notEquals:
+            return actualValue != expectedValue
+        case .greaterThan:
+            guard let comparison = numericComparison(actualValue, expectedValue) else { return false }
+            return comparison > 0
+        case .greaterThanOrEquals:
+            guard let comparison = numericComparison(actualValue, expectedValue) else { return false }
+            return comparison >= 0
+        case .lessThan:
+            guard let comparison = numericComparison(actualValue, expectedValue) else { return false }
+            return comparison < 0
+        case .lessThanOrEquals:
+            guard let comparison = numericComparison(actualValue, expectedValue) else { return false }
+            return comparison <= 0
+        }
+    }
+
+    private func numericComparison(
+        _ actualValue: WorkspaceAppStorageValue?,
+        _ expectedValue: WorkspaceAppStorageValue?
+    ) -> Int? {
+        guard let actualNumber = numericValue(actualValue),
+              let expectedNumber = numericValue(expectedValue) else {
+            return nil
+        }
+        if actualNumber < expectedNumber { return -1 }
+        if actualNumber > expectedNumber { return 1 }
+        return 0
+    }
+
+    private func numericValue(_ value: WorkspaceAppStorageValue?) -> Double? {
+        switch value {
+        case .integer(let value):
+            return Double(value)
+        case .real(let value):
+            return value
+        case .text(let value):
+            return Double(value)
+        case .bool, .null, nil:
+            return nil
+        }
+    }
+
+    private func describeGateValue(_ value: WorkspaceAppStorageValue?) -> String {
+        switch value {
+        case .null, nil:
+            return "null"
+        case .text(let value):
+            return value
+        case .integer(let value):
+            return "\(value)"
+        case .real(let value):
+            return value.formatted(.number.precision(.fractionLength(0...12)))
+        case .bool(let value):
+            return value ? "true" : "false"
+        }
     }
 
     private func normalized(_ candidates: String?..., fallback: String) -> String {

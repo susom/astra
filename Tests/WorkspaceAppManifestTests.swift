@@ -213,6 +213,39 @@ struct WorkspaceAppManifestTests {
         })
     }
 
+    @Test("manifest validation rejects invalid expression gates")
+    func validationRejectsInvalidExpressionGates() {
+        var manifest = Self.reconciliationManifest()
+        manifest.actions = [
+            WorkspaceAppActionSpec(
+                id: "expression_gate",
+                type: "gate.expression",
+                label: "Ready Gate",
+                gateOperator: "around"
+            ),
+            WorkspaceAppActionSpec(
+                id: "threshold_gate",
+                type: "gate.expression",
+                label: "Threshold Gate",
+                gateField: "score",
+                gateOperator: "greaterThan"
+            )
+        ]
+
+        let report = WorkspaceAppManifestValidator.validate(manifest)
+
+        #expect(!report.isValid)
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/gateField" && $0.message.contains("field")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/0/gateOperator" && $0.message.contains("not supported")
+        })
+        #expect(report.blockers.contains {
+            $0.path == "/actions/1/gateValue" && $0.message.contains("comparison value")
+        })
+    }
+
     @Test("manifest validation rejects invalid pipeline step references")
     func validationRejectsInvalidPipelineStepReferences() {
         var manifest = Self.reconciliationManifest()

@@ -271,6 +271,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
     var taskGoal: String?
     var approvalPrompt: String?
     var approvalDecisions: [String]
+    var gateField: String?
+    var gateOperator: String?
+    var gateValue: WorkspaceAppStorageValue?
     var steps: [String]
 
     enum CodingKeys: String, CodingKey {
@@ -285,6 +288,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         case taskGoal
         case approvalPrompt
         case approvalDecisions
+        case gateField
+        case gateOperator
+        case gateValue
         case steps
     }
 
@@ -300,6 +306,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         taskGoal: String? = nil,
         approvalPrompt: String? = nil,
         approvalDecisions: [String] = [],
+        gateField: String? = nil,
+        gateOperator: String? = nil,
+        gateValue: WorkspaceAppStorageValue? = nil,
         steps: [String] = []
     ) {
         self.id = id
@@ -313,6 +322,9 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         self.taskGoal = taskGoal
         self.approvalPrompt = approvalPrompt
         self.approvalDecisions = approvalDecisions
+        self.gateField = gateField
+        self.gateOperator = gateOperator
+        self.gateValue = gateValue
         self.steps = steps
     }
 
@@ -329,7 +341,35 @@ struct WorkspaceAppActionSpec: Codable, Sendable, Equatable {
         taskGoal = try container.decodeIfPresent(String.self, forKey: .taskGoal)
         approvalPrompt = try container.decodeIfPresent(String.self, forKey: .approvalPrompt)
         approvalDecisions = try container.decodeIfPresent([String].self, forKey: .approvalDecisions) ?? []
+        gateField = try container.decodeIfPresent(String.self, forKey: .gateField)
+        gateOperator = try container.decodeIfPresent(String.self, forKey: .gateOperator)
+        gateValue = try container.decodeIfPresent(WorkspaceAppStorageValue.self, forKey: .gateValue)
         steps = try container.decodeIfPresent([String].self, forKey: .steps) ?? []
+    }
+}
+
+enum WorkspaceAppExpressionGateOperator: String, CaseIterable, Sendable {
+    case exists
+    case notExists
+    case equals
+    case notEquals
+    case greaterThan
+    case greaterThanOrEquals
+    case lessThan
+    case lessThanOrEquals
+
+    static var allRawValues: Set<String> {
+        Set(Self.allCases.map(\.rawValue))
+    }
+
+    static func requiresExpectedValue(_ rawValue: String) -> Bool {
+        guard let value = Self(rawValue: rawValue) else { return false }
+        switch value {
+        case .exists, .notExists:
+            return false
+        case .equals, .notEquals, .greaterThan, .greaterThanOrEquals, .lessThan, .lessThanOrEquals:
+            return true
+        }
     }
 }
 

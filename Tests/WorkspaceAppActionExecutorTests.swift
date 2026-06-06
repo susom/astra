@@ -364,6 +364,74 @@ struct WorkspaceAppActionExecutorTests {
     }
 
     @MainActor
+    @Test("pipeline expression gates block until input satisfies condition")
+    func pipelineExpressionGatesBlockUntilInputSatisfiesCondition() throws {
+        let fixture = try Self.makePublishedApp(permissionMode: .draftOnly)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        _ = try WorkspaceAppActionExecutor().execute(
+            actionID: "addItem",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(
+                table: "items",
+                record: [
+                    "id": .text("item-1"),
+                    "name": .text("Apples"),
+                    "category": .text("Produce")
+                ]
+            ),
+            modelContext: fixture.context
+        )
+
+        #expect(throws: WorkspaceAppActionExecutionError.gateBlocked("readyGate")) {
+            try WorkspaceAppActionExecutor().execute(
+                actionID: "readyPipeline",
+                app: fixture.app,
+                workspace: fixture.workspace,
+                manifest: fixture.manifest,
+                input: WorkspaceAppActionInput(record: ["status": .text("draft")]),
+                modelContext: fixture.context
+            )
+        }
+
+        let blockedRun = try #require(try fixture.context.fetch(FetchDescriptor<WorkspaceAppRun>())
+            .first { $0.actionID == "readyPipeline" })
+        #expect(blockedRun.status == .blocked)
+        #expect(blockedRun.linkedArtifactPath == nil)
+
+        var events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == blockedRun.id }
+        #expect(events.contains {
+            $0.type == "workspaceApp.gate.blocked" &&
+                $0.payload.contains("\"field\":\"status\"") &&
+                $0.payload.contains("\"actualValue\":\"draft\"") &&
+                $0.payload.contains("\"expectedValue\":\"ready\"")
+        })
+        #expect(!events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("exportItems") })
+
+        let passedResult = try WorkspaceAppActionExecutor().execute(
+            actionID: "readyPipeline",
+            app: fixture.app,
+            workspace: fixture.workspace,
+            manifest: fixture.manifest,
+            input: WorkspaceAppActionInput(record: ["status": .text("ready")]),
+            modelContext: fixture.context
+        )
+
+        #expect(passedResult.run.status == .completed)
+        #expect(passedResult.outputSummary.contains("readyGate: Expression gate 'readyGate' passed."))
+        #expect(passedResult.outputSummary.contains("exportItems: Exported items.csv."))
+        #expect(passedResult.run.linkedArtifactPath?.contains("items.csv") == true)
+
+        events = try fixture.context.fetch(FetchDescriptor<WorkspaceAppRunEvent>())
+            .filter { $0.runID == passedResult.run.id }
+        #expect(events.contains { $0.type == "workspaceApp.gate.passed" })
+        #expect(events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("readyGate") })
+        #expect(events.contains { $0.type == "workspaceApp.pipeline.step.completed" && $0.payload.contains("exportItems") })
+    }
+
+    @MainActor
     @Test("read-only apps block local write actions and record blocked runs")
     func readOnlyAppsBlockLocalWriteActionsAndRecordBlockedRuns() throws {
         let fixture = try Self.makePublishedApp(permissionMode: .readOnly)
@@ -566,6 +634,20 @@ struct WorkspaceAppActionExecutorTests {
                     type: "pipeline.run",
                     label: "Approval Pipeline",
                     steps: ["approvalGate", "exportItems"]
+                ),
+                WorkspaceAppActionSpec(
+                    id: "readyGate",
+                    type: "gate.expression",
+                    label: "Ready Gate",
+                    gateField: "status",
+                    gateOperator: "equals",
+                    gateValue: .text("ready")
+                ),
+                WorkspaceAppActionSpec(
+                    id: "readyPipeline",
+                    type: "pipeline.run",
+                    label: "Ready Pipeline",
+                    steps: ["readyGate", "exportItems"]
                 )
             ],
             permissions: WorkspaceAppPermissions(
