@@ -30,7 +30,6 @@ struct TaskSidebarContainerView: View {
     var onDeleteApp: ((WorkspaceApp) -> Void)?
     var onNewSchedule: (() -> Void)?
     var onEditSchedule: ((TaskSchedule) -> Void)?
-    @Binding var isSearchActive: Bool
 
     var body: some View {
         TaskSidebarView(
@@ -60,8 +59,7 @@ struct TaskSidebarContainerView: View {
             onExportApp: onExportApp,
             onDeleteApp: onDeleteApp,
             onNewSchedule: onNewSchedule,
-            onEditSchedule: onEditSchedule,
-            isSearchActive: $isSearchActive
+            onEditSchedule: onEditSchedule
         )
     }
 }
@@ -113,12 +111,55 @@ enum SidebarLeanPresentation {
     static let workspaceAppRowsUseAppIcon = true
     static let workspaceAppMenuIncludesShareActions = true
     static let pinnedPreviewLimit = 5
+    // Keep child task chrome close to the sidebar edge; the workspace card
+    // above establishes scope, while task rows need the reclaimed title width.
     static let childTaskListLeadingPadding: CGFloat = 0
     static let childTaskContentLeadingPadding: CGFloat = 0
     static let workspaceRowTrailingSlotWidth: CGFloat = 58
     static let newTaskVerticalPadding: CGFloat = 7
     static let newTaskRestFillOpacity = 0.045
     static let newTaskHoverFillOpacity = 0.075
+}
+
+enum SidebarThreadRowLayout {
+    static let rowHorizontalPadding: CGFloat = 8
+    static let statusIconWidth: CGFloat = 14
+    static let statusIconTitleSpacing: CGFloat = 9
+    static let titleFontSize: CGFloat = 14
+
+    static func showsStatusIcon(
+        for status: TaskStatus,
+        isHovered: Bool,
+        isSelected: Bool
+    ) -> Bool {
+        isHovered || isSelected || isActionableStatus(status)
+    }
+
+    static func isActionableStatus(_ status: TaskStatus) -> Bool {
+        switch status {
+        case .running, .pendingUser, .failed, .budgetExceeded:
+            return true
+        case .draft, .queued, .completed, .cancelled:
+            return false
+        }
+    }
+
+    static func restingTitleLeadingOffset(
+        childListPadding: CGFloat,
+        contentLeadingPadding: CGFloat,
+        status: TaskStatus
+    ) -> CGFloat {
+        childListPadding
+            + rowHorizontalPadding
+            + contentLeadingPadding
+            + reservedStatusIconWidth(for: status)
+    }
+
+    private static func reservedStatusIconWidth(for status: TaskStatus) -> CGFloat {
+        isActionableStatus(status)
+            ? statusIconWidth + statusIconTitleSpacing
+            : 0
+    }
 }
 
 enum SidebarColumnLayout {
@@ -131,15 +172,25 @@ enum SidebarColumnLayout {
     static let collapseEdge: Edge = .leading
     static let collapseUsesRightPanelMotion = true
 
-    static func shouldCollapseExpandedSidebar(width: CGFloat) -> Bool {
-        width > 0 && width < expandedMinimumWidth
+    static func shouldCollapseExpandedSidebar(width: CGFloat, isRevealInProgress: Bool = false) -> Bool {
+        guard !isRevealInProgress else { return false }
+        return width > 0 && width < expandedMinimumWidth
     }
 
     static func shouldCollapseVisibleSplitWidth(
         _ width: CGFloat,
+        minimumExpandedWidth: CGFloat = expandedMinimumWidth,
+        isRevealInProgress: Bool = false
+    ) -> Bool {
+        guard !isRevealInProgress else { return false }
+        return width.isFinite && width > 0 && width < minimumExpandedWidth
+    }
+
+    static func shouldCompleteSidebarReveal(
+        width: CGFloat,
         minimumExpandedWidth: CGFloat = expandedMinimumWidth
     ) -> Bool {
-        width.isFinite && width > 0 && width < minimumExpandedWidth
+        width.isFinite && width >= minimumExpandedWidth
     }
 
     static func collapseAnimation(reduceMotion: Bool) -> Animation? {
@@ -151,8 +202,27 @@ enum SidebarColumnLayout {
     }
 }
 
+enum SidebarRevealSettlingPolicy {
+    static let fallbackDelayNanoseconds: UInt64 = 450_000_000
+
+    static func nextRevision(after revision: Int) -> Int {
+        revision == Int.max ? 1 : revision + 1
+    }
+
+    static func shouldBeginReveal(isRevealInProgress: Bool) -> Bool {
+        !isRevealInProgress
+    }
+
+    static func shouldClearReveal(
+        scheduledRevision: Int,
+        currentRevision: Int,
+        isRevealInProgress: Bool
+    ) -> Bool {
+        isRevealInProgress && scheduledRevision == currentRevision
+    }
+}
+
 private struct SidebarTopToolbar: View {
-    @Binding var isSearchActive: Bool
     let showsWorkspaceActions: Bool
     var onNewWorkspace: (() -> Void)?
     var onImportWorkspace: (() -> Void)?
@@ -162,16 +232,11 @@ private struct SidebarTopToolbar: View {
     }
 
     var body: some View {
-        AstraToolbarCommandCluster {
-            Button { isSearchActive.toggle() } label: {
-                AstraToolbarCommandIcon(systemImage: "magnifyingglass", isActive: isSearchActive)
-            }
-            .buttonStyle(.plain)
-            .help("Search (⌘F)")
-            .keyboardShortcut("f", modifiers: .command)
-            .accessibilityLabel("Search")
-
-            if showsAddWorkspaceMenu {
+        // Search moved to the leading titlebar accessory (AstraLeadingCommandBar).
+        // Only the workspace-list add menu remains; render nothing when it doesn't
+        // apply so the column toolbar stays empty rather than padded.
+        if showsAddWorkspaceMenu {
+            AstraToolbarCommandCluster {
                 Menu {
                     if let onNewWorkspace {
                         Button(action: onNewWorkspace) {
@@ -312,7 +377,6 @@ struct TaskSidebarView: View {
     var onDeleteApp: ((WorkspaceApp) -> Void)?
     var onNewSchedule: (() -> Void)?
     var onEditSchedule: ((TaskSchedule) -> Void)?
-    @Binding var isSearchActive: Bool
 
     @Environment(\.modelContext) private var modelContext
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -447,7 +511,6 @@ struct TaskSidebarView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 SidebarTopToolbar(
-                    isSearchActive: $isSearchActive,
                     showsWorkspaceActions: selectedWorkspace == nil,
                     onNewWorkspace: onNewWorkspace,
                     onImportWorkspace: onImportWorkspace
@@ -2149,16 +2212,15 @@ private struct SidebarThreadRow: View {
     }
 
     private var showIcon: Bool {
-        isSelected || isHovered || isActionableStatus
+        SidebarThreadRowLayout.showsStatusIcon(
+            for: task.status,
+            isHovered: isHovered,
+            isSelected: isSelected
+        )
     }
 
     private var isActionableStatus: Bool {
-        switch task.status {
-        case .running, .pendingUser, .failed, .budgetExceeded:
-            return true
-        default:
-            return false
-        }
+        SidebarThreadRowLayout.isActionableStatus(task.status)
     }
 
     /// Inline chip surfaced only for exceptional or active states. Draft,
@@ -2180,17 +2242,22 @@ private struct SidebarThreadRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 9) {
-            statusIcon
-                .frame(width: 14, height: 14)
-                .opacity(showIcon ? (isActionableStatus && !isSelected && !isHovered ? 0.6 : 1) : 0)
-                .padding(.leading, contentLeadingPadding)
+        HStack(alignment: .center, spacing: SidebarThreadRowLayout.statusIconTitleSpacing) {
+            if showIcon {
+                statusIcon
+                    .frame(
+                        width: SidebarThreadRowLayout.statusIconWidth,
+                        height: SidebarThreadRowLayout.statusIconWidth
+                    )
+                    .opacity(isActionableStatus && !isSelected && !isHovered ? 0.6 : 1)
+                    .padding(.leading, contentLeadingPadding)
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     SidebarTaskTitleText(
                         presentation: titlePresentation,
-                        font: Stanford.ui(13, weight: titleWeight)
+                        font: Stanford.ui(SidebarThreadRowLayout.titleFontSize, weight: titleWeight)
                     )
                     .layoutPriority(1)
 
@@ -2213,6 +2280,7 @@ private struct SidebarThreadRow: View {
                         .lineLimit(1)
                 }
             }
+            .padding(.leading, showIcon ? 0 : contentLeadingPadding)
 
             Spacer(minLength: 6)
 
@@ -2250,7 +2318,7 @@ private struct SidebarThreadRow: View {
                 .animation(metadataAnimation, value: isHovered)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, SidebarThreadRowLayout.rowHorizontalPadding)
         .padding(.vertical, 5)
         .frame(minHeight: Stanford.sidebarThreadRowHeight, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2352,257 +2420,5 @@ private struct SidebarThreadRow: View {
     private func formatCost(_ cost: Double) -> String {
         if cost < 0.01 { return "<$0.01" }
         return String(format: "$%.2f", cost)
-    }
-}
-
-// MARK: - Search Panel Overlay
-
-struct SearchPanelOverlayContainer: View {
-    @Query(sort: \AgentTask.queuePosition) private var tasks: [AgentTask]
-
-    let workspaces: [Workspace]
-    @Binding var selectedTask: AgentTask?
-    @Binding var selectedWorkspace: Workspace?
-    @Binding var isActive: Bool
-
-    var body: some View {
-        SearchPanelOverlay(
-            tasks: tasks,
-            workspaces: workspaces,
-            selectedTask: $selectedTask,
-            selectedWorkspace: $selectedWorkspace,
-            isActive: $isActive
-        )
-    }
-}
-
-struct SearchPanelOverlay: View {
-    let tasks: [AgentTask]
-    let workspaces: [Workspace]
-    @Binding var selectedTask: AgentTask?
-    @Binding var selectedWorkspace: Workspace?
-    @Binding var isActive: Bool
-    @Environment(\.modelContext) private var modelContext
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var searchText = ""
-    @FocusState private var isFocused: Bool
-    @State private var selectedIndex = 0
-
-    private var presentationAnimation: Animation? {
-        AstraMotion.disclosure(reduceMotion: reduceMotion)
-    }
-
-    private func dismiss() {
-        withAnimation(presentationAnimation) {
-            isActive = false
-            searchText = ""
-        }
-    }
-
-    private var recentTasks: [AgentTask] {
-        Array(tasks.sorted { $0.updatedAt > $1.updatedAt }.prefix(9))
-    }
-
-    private var filteredTasks: [AgentTask] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return recentTasks }
-        return tasks.filter {
-            $0.title.localizedCaseInsensitiveContains(query) ||
-            $0.goal.localizedCaseInsensitiveContains(query) ||
-            ($0.workspace?.name.localizedCaseInsensitiveContains(query) ?? false) ||
-            ($0.workspace?.primaryPath.localizedCaseInsensitiveContains(query) ?? false)
-        }
-        .sorted { $0.updatedAt > $1.updatedAt }
-        .prefix(12)
-        .map { $0 }
-    }
-
-    private var filteredWorkspaces: [Workspace] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-        return workspaces.filter {
-            $0.name.localizedCaseInsensitiveContains(query) ||
-            $0.primaryPath.localizedCaseInsensitiveContains(query)
-        }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-    }
-
-    private func toggleStarred(for workspace: Workspace) {
-        workspace.isStarred.toggle()
-        workspace.updatedAt = Date()
-        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: workspace, modelContext: modelContext)
-    }
-
-    private func togglePinned(for task: AgentTask) {
-        task.isPinned.toggle()
-        task.updatedAt = Date()
-        WorkspacePersistenceCoordinator.saveAndAutoExport(workspace: task.workspace, modelContext: modelContext)
-    }
-
-    var body: some View {
-        ZStack {
-            Stanford.scrim.opacity(0.25)
-                .ignoresSafeArea()
-                .onTapGesture { dismiss() }
-
-            VStack(spacing: 0) {
-                // Search field
-                HStack(spacing: 10) {
-                    Image(systemName: "magnifyingglass")
-                        .font(Stanford.ui(15))
-                        .foregroundStyle(.secondary)
-
-                    TextField("Search tasks and workspaces", text: $searchText)
-                        .textFieldStyle(.plain)
-                        .font(Stanford.ui(16))
-                        .focused($isFocused)
-                        .onSubmit {
-                            if let task = filteredTasks.first {
-                                selectedTask = task
-                                dismiss()
-                            }
-                        }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 14)
-
-                Divider()
-
-                // Results
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if !filteredWorkspaces.isEmpty {
-                            Text("Workspaces")
-                                .font(Stanford.caption(11).weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 16)
-                                .padding(.top, 10)
-                                .padding(.bottom, 4)
-
-                            ForEach(filteredWorkspaces) { ws in
-                                HStack(spacing: 6) {
-                                    Button {
-                                        selectedWorkspace = ws
-                                        selectedTask = nil
-                                        dismiss()
-                                    } label: {
-                                        HStack(spacing: 10) {
-                                            Image(systemName: "folder.fill")
-                                                .font(Stanford.ui(13))
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 18)
-                                            Text(ws.name)
-                                                .font(Stanford.ui(14))
-                                                .foregroundStyle(.primary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                                .help(ws.name)
-                                            Spacer()
-                                        }
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-
-                                    Button {
-                                        toggleStarred(for: ws)
-                                    } label: {
-                                        Image(systemName: ws.isStarred ? "star.fill" : "star")
-                                            .font(Stanford.ui(13, weight: .semibold))
-                                            .foregroundStyle(ws.isStarred ? Stanford.lagunita : .secondary)
-                                            .frame(width: 26, height: 24)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help(ws.isStarred ? "Unstar workspace" : "Star workspace")
-                                    .accessibilityLabel(ws.isStarred ? "Unstar \(ws.name)" : "Star \(ws.name)")
-                                }
-                                .padding(.leading, 16)
-                                .padding(.trailing, 12)
-                                .padding(.vertical, 7)
-                            }
-                        }
-
-                        Text(searchText.isEmpty ? "Recent tasks" : "Tasks")
-                            .font(Stanford.caption(11).weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.top, filteredWorkspaces.isEmpty ? 10 : 14)
-                            .padding(.bottom, 4)
-
-                        ForEach(Array(filteredTasks.enumerated()), id: \.element.id) { idx, task in
-                            HStack(spacing: 6) {
-                                Button {
-                                    selectedTask = task
-                                    dismiss()
-                                } label: {
-                                    HStack(spacing: 10) {
-                                        Image(systemName: "bubble.left")
-                                            .font(Stanford.ui(13))
-                                            .foregroundStyle(.secondary)
-                                            .frame(width: 18)
-                                        SidebarTaskTitleText(
-                                            presentation: Formatters.sidebarTaskTitlePresentation(task.title),
-                                            font: Stanford.ui(14, weight: task.shouldShowUnread ? .semibold : .regular)
-                                        )
-                                        .layoutPriority(1)
-                                        Spacer()
-                                        if let ws = task.workspace {
-                                            Text(Formatters.shortenIdentifierTokens(ws.name, maxTokenLength: 24, keepEachSide: 8))
-                                                .font(Stanford.caption(11))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.tail)
-                                                .help(ws.name)
-                                        }
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    togglePinned(for: task)
-                                } label: {
-                                    Image(systemName: task.isPinned ? "pin.fill" : "pin")
-                                        .font(Stanford.ui(13, weight: .semibold))
-                                        .foregroundStyle(task.isPinned ? Stanford.lagunita : .secondary)
-                                        .frame(width: 26, height: 24)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                .help(task.isPinned ? "Unpin task" : "Pin task")
-                                .accessibilityLabel(task.isPinned ? "Unpin \(task.title)" : "Pin \(task.title)")
-                            }
-                            .padding(.leading, 16)
-                            .padding(.trailing, 12)
-                            .padding(.vertical, 7)
-                            .background(idx == selectedIndex ? Color.primary.opacity(0.06) : .clear)
-                        }
-
-                        if filteredTasks.isEmpty && filteredWorkspaces.isEmpty {
-                            HStack {
-                                Spacer()
-                                Text("No results found")
-                                    .font(Stanford.ui(13))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                            }
-                            .padding(.vertical, 20)
-                        }
-                    }
-                    .padding(.bottom, 8)
-                }
-                .frame(maxHeight: 350)
-            }
-            .frame(width: 520)
-            .background(.ultraThickMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
-            .padding(.top, 60)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .onExitCommand { dismiss() }
-            .onAppear { isFocused = true }
-            .onChange(of: searchText) { _, _ in selectedIndex = 0 }
-        }
-        .transition(.opacity)
     }
 }
