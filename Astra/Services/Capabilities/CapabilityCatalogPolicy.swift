@@ -32,6 +32,26 @@ struct CapabilityCatalogPolicyContext: Equatable {
         Set(values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
     }
 
+    /// Policy context for the person using this ASTRA install. ASTRA is a
+    /// single-user app today: the local user owns the machine and the
+    /// approval store, so they are the admin of their own catalog. This is
+    /// the ONLY place that assumption lives — a future multi-user or
+    /// MDM-managed mode changes admin resolution here, not at call sites.
+    /// Do not construct contexts with a literal `isAdmin: true` outside
+    /// this factory (enforced by an architecture fitness test).
+    static func currentUser(
+        workspace: Workspace,
+        currentAppVersion: SemanticVersion = SemanticVersion(string: AppBuildInfo.current.version) ?? SemanticVersion(0, 0, 0),
+        approvalRecords: [CapabilityApprovalRecord]
+    ) -> CapabilityCatalogPolicyContext {
+        workspaceUser(
+            workspace: workspace,
+            isAdmin: true,
+            currentAppVersion: currentAppVersion,
+            approvalRecords: approvalRecords
+        )
+    }
+
     static func workspaceUser(
         workspace: Workspace,
         userRoleIDs: Set<String> = [],
@@ -135,6 +155,23 @@ struct CapabilityCatalogDecision: Equatable {
     var blockerMessages: [String] {
         blockers.map(\.message)
     }
+
+    /// Blockers that prevent enablement for reasons other than pending review.
+    /// Draft / admin-approval / digest-mismatch gating is surfaced as
+    /// "Needs attention" (an actionable approval step), so it must not be
+    /// treated as a hard block. Any remaining blocker (explicitly blocked
+    /// status, visibility scoping, unsafe tooling, version conflicts, etc.)
+    /// genuinely prevents the user from acting and belongs in "Blocked".
+    var hasNonApprovalBlockers: Bool {
+        blockers.contains { blocker in
+            switch blocker {
+            case .draftRequiresApproval, .adminApprovalRequired, .approvalDigestMismatch:
+                return false
+            default:
+                return true
+            }
+        }
+    }
 }
 
 enum CapabilityCatalogPolicy {
@@ -236,6 +273,19 @@ enum CapabilityCatalogPolicy {
         for server in package.mcpServers {
             if let reason = unsafeMCPServerReason(server) {
                 operationalBlockers.append(.unsafeMCPServer(name: displayName(server.displayName, fallback: server.id), reason: reason))
+            }
+            if let nameReason = MCPEnvironmentKeyPolicy.invalidNameReason(server: server) {
+                operationalBlockers.append(.unsafeMCPServer(
+                    name: displayName(server.displayName, fallback: server.id),
+                    reason: nameReason
+                ))
+            }
+            let undeclared = MCPEnvironmentKeyPolicy.undeclaredKeys(server: server, package: package)
+            if !undeclared.isEmpty {
+                operationalBlockers.append(.unsafeMCPServer(
+                    name: displayName(server.displayName, fallback: server.id),
+                    reason: "requests environment keys the package does not declare (\(undeclared.joined(separator: ", ")))"
+                ))
             }
         }
 

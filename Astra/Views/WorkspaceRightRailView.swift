@@ -99,19 +99,9 @@ enum WorkspaceContextIconography {
     static let headerIcon = "info.circle"
 
     static func capabilityIcon(name: String, fallback: String) -> String {
-        let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized.contains("bigquery") {
-            return "cylinder.split.1x2"
-        }
-        if normalized.contains("read-only") || normalized.contains("read only") {
-            return "eye"
-        }
-        if normalized.contains("safe bash") {
-            return "terminal"
-        }
-        return fallback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "puzzlepiece.extension"
-            : fallback
+        CapabilityIconPresentation
+            .make(name: name, fallbackSystemName: fallback)
+            .legacySystemName
     }
 }
 
@@ -160,6 +150,7 @@ struct WorkspaceRightRailView: View {
     @State private var expandedWorkspaceSetupItems: Set<WorkspaceSetupItem> = []
     @State private var approvedCapabilityPackages: [PluginPackage] = PluginCatalog.builtInPackages
     @State private var capabilityError: String?
+    @State private var capabilityPrerequisiteStatuses: [String: HealthStatus] = [:]
     @State private var scrollMetrics = RightRailScrollMetrics()
     @State private var isReadyCapabilitiesExpanded = false
     @State private var isDraftCapabilitiesExpanded = false
@@ -182,9 +173,8 @@ struct WorkspaceRightRailView: View {
     }
 
     private var catalogPolicyContext: CapabilityCatalogPolicyContext {
-        CapabilityCatalogPolicyContext.workspaceUser(
+        CapabilityCatalogPolicyContext.currentUser(
             workspace: workspace,
-            isAdmin: true,
             approvalRecords: CapabilityApprovalStore().records()
         )
     }
@@ -377,6 +367,7 @@ struct WorkspaceRightRailView: View {
         .onAppear {
             loadSSHConnections()
             refreshApprovedCapabilities()
+            refreshCapabilityPrerequisiteStatuses()
             applyConfigureDefaults()
             checkGitRepositories()
         }
@@ -551,6 +542,16 @@ struct WorkspaceRightRailView: View {
         }
     }
 
+    private func capabilitySummaryIconPresentation(
+        for style: CapabilityRailGroupStyle,
+        items: [RailCapabilityItem]
+    ) -> CapabilityIconPresentation {
+        CapabilityRailSectionPresentation.summaryIconPresentation(
+            for: items.map(capabilityIconPresentation),
+            fallbackSystemName: capabilitySummaryIcon(for: style)
+        )
+    }
+
     private func capabilitySummaryTint(for style: CapabilityRailGroupStyle) -> Color {
         switch style {
         case .attention:
@@ -587,7 +588,7 @@ struct WorkspaceRightRailView: View {
                 .buttonStyle(.plain)
             } else {
                 CapabilitySummaryRow(
-                    icon: capabilitySummaryIcon(for: style),
+                    icon: capabilitySummaryIconPresentation(for: style, items: items),
                     iconColor: capabilitySummaryTint(for: style),
                     title: summaryTitle,
                     subtitle: summarySubtitle,
@@ -795,7 +796,7 @@ struct WorkspaceRightRailView: View {
         let isHighlighted = item.readiness.level == .needsAttention
 
         return CapabilityRailRow(
-            icon: WorkspaceContextIconography.capabilityIcon(name: item.name, fallback: item.icon),
+            icon: capabilityIconPresentation(for: item),
             title: capabilityDisplayName(item.name),
             subtitle: capabilityListSubtitle(for: item),
             color: item.color,
@@ -818,6 +819,13 @@ struct WorkspaceRightRailView: View {
                     .padding(.leading, 2)
             }
         }
+    }
+
+    private func capabilityIconPresentation(for item: RailCapabilityItem) -> CapabilityIconPresentation {
+        if case .package(let package) = item.source {
+            return .make(for: package)
+        }
+        return .make(name: item.name, fallbackSystemName: item.icon)
     }
 
     private var enabledPackageCount: Int {
@@ -956,7 +964,11 @@ struct WorkspaceRightRailView: View {
                 .compactMap { package -> RailCapabilityItem? in
                     let packageState = state(for: package)
                     guard packageState.isEnabled else { return nil }
-                    return makePackageCapabilityItem(package, state: packageState)
+                    return makePackageCapabilityItem(
+                        package,
+                        state: packageState,
+                        prerequisiteStatuses: capabilityPrerequisiteStatuses
+                    )
                 }
                 .sorted(by: sortRailCapabilityItems)
 
@@ -1024,7 +1036,11 @@ struct WorkspaceRightRailView: View {
         return 100
     }
 
-    private func makePackageCapabilityItem(_ package: PluginPackage, state: CapabilityPackageState) -> RailCapabilityItem {
+    private func makePackageCapabilityItem(
+        _ package: PluginPackage,
+        state: CapabilityPackageState,
+        prerequisiteStatuses: [String: HealthStatus]
+    ) -> RailCapabilityItem {
         let sharedResourceCount = state.linkedSkills.filter(\.isGlobal).count
             + state.linkedConnectors.filter(\.isGlobal).count
             + state.linkedTools.filter(\.isGlobal).count
@@ -1036,9 +1052,14 @@ struct WorkspaceRightRailView: View {
             + package.localTools.count
             + package.templates.count
             + package.browserAdapters.count
+        let readiness = readiness(
+            for: package,
+            stateReadiness: state.readiness,
+            prerequisiteStatuses: prerequisiteStatuses
+        )
         let presentation = CapabilityRailPackagePresentation.make(
             isEnabled: state.isEnabled,
-            readinessLevel: state.readiness.level,
+            readinessLevel: readiness.level,
             workspaceName: workspace.name,
             sharedResourceCount: sharedResourceCount,
             workspaceResourceCount: workspaceResourceCount,
@@ -1053,7 +1074,7 @@ struct WorkspaceRightRailView: View {
             summary: package.description.isEmpty ? package.contentSummary : package.description,
             color: Stanford.lagunita,
             isEnabled: state.isEnabled,
-            readiness: state.readiness,
+            readiness: readiness,
             presentation: presentation,
             source: .package(package),
             skillNames: (package.skills.map(\.name) + state.linkedSkills.map(\.name)).uniqueSorted(),
@@ -1116,6 +1137,24 @@ struct WorkspaceRightRailView: View {
         return messages.isEmpty
             ? .ready
             : CapabilityReadiness(level: .needsAttention, messages: messages)
+    }
+
+    private func readiness(
+        for package: PluginPackage,
+        stateReadiness: CapabilityReadiness,
+        prerequisiteStatuses: [String: HealthStatus]
+    ) -> CapabilityReadiness {
+        guard stateReadiness.level != .inactive else { return stateReadiness }
+        let prerequisiteMessages = CapabilityHealthService.readinessMessages(
+            for: package,
+            statuses: prerequisiteStatuses
+        )
+        guard !prerequisiteMessages.isEmpty else { return stateReadiness }
+        let existingMessages = stateReadiness.level == .ready ? [] : stateReadiness.messages
+        return CapabilityReadiness(
+            level: .needsAttention,
+            messages: existingMessages + prerequisiteMessages
+        )
     }
 
     private func skillSharedResourceCount(skill: Skill, connectors: [Connector], tools: [LocalTool]) -> Int {
@@ -1202,6 +1241,7 @@ struct WorkspaceRightRailView: View {
                         traceID: traceID
                     )
                     refreshApprovedCapabilities()
+                    refreshCapabilityPrerequisiteStatuses()
                 } catch {
                     capabilityError = error.localizedDescription
                     AppLogger.audit(.capabilityEnableFailed, category: "Capabilities", fields: [
@@ -1320,6 +1360,30 @@ struct WorkspaceRightRailView: View {
             CapabilityLibrary().installedPackages()
         }
         approvedCapabilityPackages = packages.isEmpty ? PluginCatalog.builtInPackages : packages
+    }
+
+    private func refreshCapabilityPrerequisiteStatuses() {
+        let currentCapabilities = capabilities
+        let packages = approvedCapabilityPackages.filter { package in
+            guard !package.prerequisites.isEmpty else { return false }
+            return CapabilityPackageState(
+                package: package,
+                workspace: workspace,
+                capabilities: currentCapabilities
+            ).isEnabled
+        }
+        Task { @MainActor in
+            let cache = PreflightCache()
+            var statuses: [String: HealthStatus] = [:]
+            for package in packages {
+                let packageStatuses = await CapabilityHealthService.prerequisiteStatuses(
+                    for: package,
+                    cache: cache
+                )
+                statuses.merge(packageStatuses) { _, new in new }
+            }
+            capabilityPrerequisiteStatuses = statuses
+        }
     }
 
     private func readinessColor(for readiness: CapabilityReadiness, isEnabled: Bool) -> Color {
@@ -2789,19 +2853,55 @@ private struct RailCountBadge: View {
 }
 
 private struct CapabilitySummaryRow: View {
-    let icon: String
+    let icon: CapabilityIconPresentation
     let iconColor: Color
     let title: String
     let subtitle: String
     let actionTitle: String?
     let action: () -> Void
 
+    init(
+        icon: String,
+        iconColor: Color,
+        title: String,
+        subtitle: String,
+        actionTitle: String?,
+        action: @escaping () -> Void
+    ) {
+        self.init(
+            icon: CapabilityIconPresentation(kind: .systemSymbol(icon), fallbackSystemName: icon),
+            iconColor: iconColor,
+            title: title,
+            subtitle: subtitle,
+            actionTitle: actionTitle,
+            action: action
+        )
+    }
+
+    init(
+        icon: CapabilityIconPresentation,
+        iconColor: Color,
+        title: String,
+        subtitle: String,
+        actionTitle: String?,
+        action: @escaping () -> Void
+    ) {
+        self.icon = icon
+        self.iconColor = iconColor
+        self.title = title
+        self.subtitle = subtitle
+        self.actionTitle = actionTitle
+        self.action = action
+    }
+
     var body: some View {
         Button(action: action) {
             HStack(alignment: .center, spacing: CapabilityRailLayout.leadingIconSpacing) {
-                Image(systemName: icon)
-                    .font(Stanford.ui(CapabilityRailLayout.leadingIconFontSize, weight: .medium))
-                    .foregroundStyle(iconColor)
+                CapabilityIconView(
+                    presentation: icon,
+                    size: CapabilityRailLayout.leadingIconFontSize,
+                    color: iconColor
+                )
                     .frame(width: CapabilityRailLayout.leadingIconFrame)
 
                 VStack(alignment: .leading, spacing: CapabilityRailLayout.titleSubtitleSpacing) {
@@ -3007,7 +3107,7 @@ private struct RailCapabilityItem: Identifiable {
 }
 
 private struct CapabilityRailRow: View {
-    let icon: String
+    let icon: CapabilityIconPresentation
     let title: String
     let subtitle: String
     let color: Color
@@ -3021,9 +3121,11 @@ private struct CapabilityRailRow: View {
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: CapabilityRailLayout.leadingIconSpacing) {
-                Image(systemName: icon)
-                    .font(Stanford.ui(CapabilityRailLayout.leadingIconFontSize, weight: .medium))
-                    .foregroundStyle(isEnabled ? color : .secondary)
+                CapabilityIconView(
+                    presentation: icon,
+                    size: CapabilityRailLayout.leadingIconFontSize,
+                    color: isEnabled ? color : .secondary
+                )
                     .frame(width: CapabilityRailLayout.leadingIconFrame)
 
                 VStack(alignment: .leading, spacing: CapabilityRailLayout.titleSubtitleSpacing) {
