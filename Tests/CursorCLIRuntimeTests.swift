@@ -39,8 +39,8 @@ struct CursorCLIRuntimeTests {
         ])
     }
 
-    @Test("Cursor print command uses stream JSON, workspace, model, trust, and restricted sandbox")
-    func cursorPrintCommandUsesStreamJSONWorkspaceModelTrustAndRestrictedSandbox() throws {
+    @Test("Cursor print command uses stream JSON and omits unsupported workspace trust flags")
+    func cursorPrintCommandUsesStreamJSONAndOmitsUnsupportedWorkspaceTrustFlags() throws {
         let plan = CursorCLIRuntime.buildCommand(
             executablePath: "/opt/cursor-agent",
             prompt: "Summarize the repo",
@@ -57,15 +57,13 @@ struct CursorCLIRuntimeTests {
         #expect(plan.executablePath == "/opt/cursor-agent")
         #expect(plan.arguments.starts(with: [
             "--print",
-            "--output-format", "stream-json",
-            "--trust"
+            "--output-format", "stream-json"
         ]))
-        let workspaceIndex = try #require(plan.arguments.firstIndex(of: "--workspace"))
-        #expect(plan.arguments[workspaceIndex + 1] == "/tmp/workspace")
         let modelIndex = try #require(plan.arguments.firstIndex(of: "--model"))
         #expect(plan.arguments[modelIndex + 1] == "composer-2.5-fast")
-        let sandboxIndex = try #require(plan.arguments.firstIndex(of: "--sandbox"))
-        #expect(plan.arguments[sandboxIndex + 1] == "enabled")
+        #expect(plan.arguments.contains("--trust") == false)
+        #expect(plan.arguments.contains("--workspace") == false)
+        #expect(plan.arguments.contains("--sandbox") == false)
         #expect(plan.arguments.contains("--force") == false)
         #expect(plan.arguments.contains("--mode") == false)
         #expect(plan.arguments.contains("--stream-partial-output") == false)
@@ -75,8 +73,8 @@ struct CursorCLIRuntimeTests {
         #expect(plan.parsesJSONLines)
     }
 
-    @Test("Cursor interactive policy uses ask mode and sandbox")
-    func cursorInteractivePolicyUsesAskModeAndSandbox() throws {
+    @Test("Cursor interactive policy omits unsupported ask mode and sandbox flags")
+    func cursorInteractivePolicyOmitsUnsupportedAskModeAndSandboxFlags() throws {
         let plan = CursorCLIRuntime.buildCommand(
             executablePath: "/opt/cursor-agent",
             prompt: "Explain only",
@@ -88,17 +86,15 @@ struct CursorCLIRuntimeTests {
             taskEnvironment: [:]
         )
 
-        let modeIndex = try #require(plan.arguments.firstIndex(of: "--mode"))
-        #expect(plan.arguments[modeIndex + 1] == "ask")
-        let sandboxIndex = try #require(plan.arguments.firstIndex(of: "--sandbox"))
-        #expect(plan.arguments[sandboxIndex + 1] == "enabled")
+        #expect(plan.arguments.contains("--mode") == false)
+        #expect(plan.arguments.contains("--sandbox") == false)
         #expect(plan.arguments.contains("--force") == false)
         #expect(plan.arguments.contains("--model"))
         #expect(plan.arguments.contains(CursorCLIRuntime.defaultModelName()))
     }
 
-    @Test("Cursor autonomous policy grants force and disables sandbox")
-    func cursorAutonomousPolicyGrantsForceAndDisablesSandbox() throws {
+    @Test("Cursor autonomous policy grants force without unsupported sandbox flag")
+    func cursorAutonomousPolicyGrantsForceWithoutUnsupportedSandboxFlag() throws {
         let plan = CursorCLIRuntime.buildCommand(
             executablePath: "/opt/cursor-agent",
             prompt: "Implement the plan",
@@ -110,9 +106,8 @@ struct CursorCLIRuntimeTests {
             taskEnvironment: [:]
         )
 
-        let sandboxIndex = try #require(plan.arguments.firstIndex(of: "--sandbox"))
-        #expect(plan.arguments[sandboxIndex + 1] == "disabled")
         #expect(plan.arguments.contains("--force"))
+        #expect(plan.arguments.contains("--sandbox") == false)
         #expect(plan.arguments.contains("--mode") == false)
     }
 
@@ -279,8 +274,9 @@ struct CursorCLIRuntimeTests {
         )
 
         #expect(render.providerID == AgentRuntimeID.cursorCLI)
-        #expect(render.generatedConfigPreview.contains("--sandbox enabled"))
+        #expect(render.generatedConfigPreview.contains("--sandbox") == false)
         #expect(render.generatedConfigPreview.contains("--force") == false)
+        #expect(render.enforcementTiers == [.astraBrokered])
         #expect(render.diagnostics.contains { $0.id == "cursor_cli.fine-grained-provider-native-gap" })
         #expect(render.usesBroadProviderPermissions == false)
     }

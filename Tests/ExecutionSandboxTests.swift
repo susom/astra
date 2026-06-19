@@ -333,7 +333,7 @@ struct ExecutionSandboxTests {
     }
 
     @Test("Strict read-scope starts the Homebrew Copilot CLI under sandbox")
-    func strictReadScopeStartsHomebrewCopilotCLI() throws {
+    func strictReadScopeStartsHomebrewCopilotCLI() async throws {
         let fm = FileManager.default
         guard fm.isExecutableFile(atPath: ExecutionSandbox.sandboxExecPath) else { return }
 
@@ -381,21 +381,19 @@ struct ExecutionSandboxTests {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        do {
-            try process.run()
-        } catch {
-            Issue.record("Failed to launch sandboxed Copilot CLI: \(error)")
-            return
+        let result = await AsyncProcessRunner.run(
+            process,
+            stdout: stdout,
+            stderr: stderr,
+            timeoutSeconds: 20
+        )
+        let output = [result.stdout, result.stderr]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        if result.exitCode != 0 {
+            Issue.record("Sandboxed Copilot CLI exited \(result.exitCode): \(output)")
         }
-        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-
-        let output = String(data: stdoutData + stderrData, encoding: .utf8) ?? ""
-        if process.terminationStatus != 0 {
-            Issue.record("Sandboxed Copilot CLI exited \(process.terminationStatus): \(output)")
-        }
-        #expect(process.terminationStatus == 0)
+        #expect(result.exitCode == 0)
         #expect(output.contains("GitHub Copilot CLI"))
     }
 

@@ -8,12 +8,13 @@ import ASTRACore
 /// Data safety contract:
 /// - UUIDs are exported for every durable entity so names are display text only.
 /// - Connector credential values are never exported. Only credential key names are written.
-/// - v1-v9 configs remain importable through optional fields and legacy name fallback.
+/// - Provider session IDs, draft composer state, and unread/sidebar state are local-only.
+/// - v1-v10 configs remain importable through optional fields and legacy name fallback.
 enum WorkspaceConfigManager {
 
-    // MARK: - Config Schema (v10)
+    // MARK: - Config Schema (v11)
 
-    static let currentVersion = 10
+    static let currentVersion = 11
 
     struct WorkspaceConfigExportResult {
         enum Status: String {
@@ -790,6 +791,20 @@ enum WorkspaceConfigManager {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(config)
         try data.write(to: url)
+        if shouldWritePortablePackageManifests(for: config, url: url) {
+            try WorkspacePortablePackageManifestService.writePackageManifests(
+                for: config,
+                workspaceURL: url.deletingLastPathComponent(),
+                exportedAt: config.exportedAt
+            )
+        }
+    }
+
+    fileprivate static func shouldWritePortablePackageManifests(for config: WorkspaceConfig, url: URL) -> Bool {
+        guard url.lastPathComponent == WorkspaceFileLayout.workspaceConfigFileName else { return false }
+        let exportParent = url.deletingLastPathComponent().standardizedFileURL.path
+        let workspacePath = URL(fileURLWithPath: config.primaryPath).standardizedFileURL.path
+        return !workspacePath.isEmpty && exportParent == workspacePath
     }
 
     private static func fetchGlobalSkills(modelContext: ModelContext) -> [Skill] {
@@ -976,6 +991,106 @@ enum WorkspaceConfigManager {
         )
     }
 
+    private static func artifactConfig(_ artifact: Artifact, task: AgentTask) -> ArtifactConfig? {
+        guard let relativePath = workspaceRelativePath(for: artifact.path, task: task) else {
+            return nil
+        }
+        return ArtifactConfig(
+            id: artifact.id.uuidString,
+            type: artifact.type,
+            path: relativePath,
+            pathBase: "workspace",
+            relativePath: relativePath,
+            content: artifact.content.map { redactedPortableText($0, for: task) },
+            version: artifact.version,
+            createdAt: artifact.createdAt
+        )
+    }
+
+    private static func redactedFileChangesJSON(_ json: String, for task: AgentTask) -> String {
+        guard !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let data = json.data(using: .utf8),
+              let changes = try? TaskEventPayloadCodec.makeDecoder().decode([StoredFileChange].self, from: data) else {
+            return json
+        }
+        let redactedChanges = changes.map { change in
+            StoredFileChange(
+                id: change.id,
+                path: portablePathForExport(change.path, task: task),
+                changeType: change.changeType,
+                content: change.content.map { redactedPortableText($0, for: task) },
+                oldString: change.oldString.map { redactedPortableText($0, for: task) },
+                newString: change.newString.map { redactedPortableText($0, for: task) },
+                timestamp: change.timestamp
+            )
+        }
+        return TaskEvent.payloadString(redactedChanges, fallback: "[]")
+    }
+
+    private static func redactedPortableText(_ text: String, for task: AgentTask) -> String {
+        guard !text.isEmpty else { return text }
+        var output = text
+        let explicitSecrets = Set(AgentSensitiveRedactions.values(for: task)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 2 })
+            .sorted { $0.count > $1.count }
+        for secret in explicitSecrets {
+            output = output.replacingOccurrences(of: secret, with: "[REDACTED]")
+        }
+        let replacements: [(String, String)] = [
+            (#"(?i)(authorization:\s*(?:bearer|basic)\s+)[^\s`"]+"#, "$1[REDACTED]"),
+            (#"\bgithub_pat_[A-Za-z0-9_]+\b"#, "[REDACTED]"),
+            (#"\bgh[pousr]_[A-Za-z0-9_]+\b"#, "[REDACTED]"),
+            (#"\bAKIA[0-9A-Z]{16}\b"#, "[REDACTED]"),
+            (#"\bsk-ant-[A-Za-z0-9_\-]+\b"#, "[REDACTED]"),
+            (#"(?i)\b(sk-[A-Za-z0-9_\-]+)\b"#, "[REDACTED]"),
+            (#"(?i)\b(api[_-]?key|token|secret|password)\s*[:=]\s*([^\s,;]+)"#, "$1=[REDACTED]")
+        ]
+        for (pattern, template) in replacements {
+            output = replacingMatches(pattern: pattern, in: output, with: template)
+        }
+        return output
+    }
+
+    private static func replacingMatches(pattern: String, in value: String, with template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return value }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.stringByReplacingMatches(in: value, range: range, withTemplate: template)
+    }
+
+    private static func portablePathForExport(_ path: String, task: AgentTask) -> String {
+        if let relative = workspaceRelativePath(for: path, task: task) {
+            return relative
+        }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return trimmed }
+        let fileName = URL(fileURLWithPath: trimmed).lastPathComponent
+        return fileName.isEmpty ? "[external]" : "[external]/\(fileName)"
+    }
+
+    private static func workspaceRelativePath(for path: String, task: AgentTask) -> String? {
+        guard let workspacePath = task.workspace?.primaryPath.trimmingCharacters(in: .whitespacesAndNewlines),
+              !workspacePath.isEmpty else {
+            return nil
+        }
+        let absolutePath = absolutePath(path, relativeTo: workspacePath)
+        let root = URL(fileURLWithPath: workspacePath, isDirectory: true).standardizedFileURL.path
+        guard absolutePath == root || absolutePath.hasPrefix(root + "/") else {
+            return nil
+        }
+        let relative = String(absolutePath.dropFirst(root.count))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return relative.isEmpty ? nil : relative
+    }
+
+    private static func absolutePath(_ path: String, relativeTo workspacePath: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = trimmed.hasPrefix("/")
+            ? URL(fileURLWithPath: trimmed)
+            : URL(fileURLWithPath: workspacePath, isDirectory: true).appendingPathComponent(trimmed)
+        return url.standardizedFileURL.path
+    }
+
     private static func taskConfig(_ task: AgentTask) -> TaskConfig {
         let sortedRuns = task.runs.sorted { $0.startedAt < $1.startedAt }
         let runIDToIndex = Dictionary(
@@ -993,13 +1108,13 @@ enum WorkspaceConfigManager {
                 inputTokens: run.inputTokens,
                 outputTokens: run.outputTokens,
                 runtimeID: run.runtimeID,
-                providerSessionId: run.providerSessionId,
+                providerSessionId: nil,
                 providerVersion: run.providerVersion,
                 exitCode: run.exitCode,
-                output: run.output,
+                output: redactedPortableText(run.output, for: task),
                 costUSD: run.costUSD,
                 stopReason: run.stopReason,
-                fileChangesJSON: run.fileChangesJSON
+                fileChangesJSON: redactedFileChangesJSON(run.fileChangesJSON, for: task)
             )
         }
 
@@ -1007,7 +1122,7 @@ enum WorkspaceConfigManager {
             EventConfig(
                 id: event.id.uuidString,
                 type: event.type,
-                payload: event.payload,
+                payload: redactedPortableText(event.payload, for: task),
                 timestamp: event.timestamp,
                 category: event.category,
                 agentName: event.agentName,
@@ -1036,16 +1151,16 @@ enum WorkspaceConfigManager {
             model: task.model,
             runtimeID: task.runtimeID,
             costUSD: task.costUSD,
-            sessionId: task.sessionId,
+            sessionId: nil,
             maxTurns: task.maxTurns,
             createdAt: task.createdAt,
             updatedAt: task.updatedAt,
             completedAt: task.completedAt,
-            unreadAt: task.unreadAt,
+            unreadAt: nil,
             isolationStrategy: task.isolationStrategy.rawValue,
             validationStrategy: task.validationStrategy.rawValue,
             testCommand: task.testCommand,
-            draftMessages: task.draftMessages,
+            draftMessages: nil,
             chainedGoal: task.chainedGoal,
             chainedFromID: task.chainedFromID?.uuidString,
             useAgentTeam: task.useAgentTeam,
@@ -1055,7 +1170,7 @@ enum WorkspaceConfigManager {
             templateHooksJSON: task.templateHooksJSON,
             runs: runConfigs,
             events: eventConfigs,
-            artifacts: task.artifacts.map(ArtifactConfig.init(artifact:)),
+            artifacts: task.artifacts.compactMap { artifactConfig($0, task: task) },
             skillIDs: task.skills.map { $0.id.uuidString },
             skillNames: task.skills.map(\.name),
             skillSnapshots: snapshots
@@ -1453,6 +1568,19 @@ enum WorkspaceConfigManager {
         }
     }
 
+    private static func importedArtifactPath(from config: ArtifactConfig, workspacePath: String) -> String {
+        let path = config.relativePath ?? config.path
+        guard config.pathBase == "workspace" || !path.hasPrefix("/") else {
+            return path
+        }
+        let trimmedWorkspacePath = workspacePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedWorkspacePath.isEmpty else { return path }
+        return URL(fileURLWithPath: trimmedWorkspacePath, isDirectory: true)
+            .appendingPathComponent(path)
+            .standardizedFileURL
+            .path
+    }
+
     private static func importTask(
         _ config: TaskConfig,
         workspace: Workspace,
@@ -1580,7 +1708,7 @@ enum WorkspaceConfigManager {
             let artifact = Artifact(
                 task: task,
                 type: ac.type,
-                path: ac.path,
+                path: importedArtifactPath(from: ac, workspacePath: workspace.primaryPath),
                 content: ac.content,
                 version: ac.version
             )
@@ -1726,6 +1854,13 @@ actor WorkspaceAutoExportWriter {
         do {
             let data = try encoder.encode(config)
             try data.write(to: url, options: .atomic)
+            if WorkspaceConfigManager.shouldWritePortablePackageManifests(for: config, url: url) {
+                try WorkspacePortablePackageManifestService.writePackageManifests(
+                    for: config,
+                    workspaceURL: url.deletingLastPathComponent(),
+                    exportedAt: config.exportedAt
+                )
+            }
         } catch {
             let nsError = error as NSError
             AppLogger.audit(.workspaceExported, category: "Persistence", fields: [

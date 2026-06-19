@@ -15,6 +15,11 @@ enum AppStorageKeys {
     // (e.g. when a schema/store change reintroduces stale enum values) is the
     // intended self-healing behavior; gating skips it on unchanged launches.
     static let completedLegacyStoreRepairBuild = "astra.startup.completedLegacyStoreRepairBuild.v1"
+    // Schema marker for the one-time workspace portability package backfill.
+    // The value includes the exported workspace schema so a future portable
+    // package revision can self-heal old workspaces without changing user data.
+    static let completedWorkspacePortablePackageBackfillVersion =
+        "astra.startup.completedWorkspacePortablePackageBackfillVersion.v1"
     static let hasSeenNewTaskNudge = "astra.hasSeenNewTaskNudge.v1"
     static let showStarredWorkspacesOnly = "astra.sidebar.showStarredWorkspacesOnly.v1"
     static let diagnosticsScope = "astra.diagnostics.scope.v1"

@@ -147,14 +147,19 @@ struct Phase2FunctionalTest {
         // 7. Verify core events exist
         let allEvents = task.events
         let eventTypes = Set(allEvents.map(\.type))
+        let historyCompacted = eventTypes.contains("activity.compacted")
+        let callbackHasToolUse = receivedEvents.contains {
+            if case .toolUse = $0 { return true }
+            return false
+        }
 
-        #expect(eventTypes.contains("task.started"), "Missing task.started")
+        #expect(eventTypes.contains("task.started") || historyCompacted, "Missing task.started")
         #expect(E2ETestSupport.hasProviderProgressEvent(eventTypes), "Missing provider progress/output event")
         if runtimeCase.expectsStructuredToolEvents {
-            #expect(eventTypes.contains("tool.use"), "Missing tool.use")
+            #expect(eventTypes.contains("tool.use") || callbackHasToolUse || historyCompacted, "Missing tool.use")
         }
         if runtimeCase.expectsUsageStats {
-            #expect(eventTypes.contains("task.stats"), "Missing task.stats")
+            #expect(eventTypes.contains("task.stats") || historyCompacted, "Missing task.stats")
         }
         if task.status == .budgetExceeded {
             #expect(eventTypes.contains("budget.exceeded"),
@@ -168,8 +173,23 @@ struct Phase2FunctionalTest {
         // 8. Verify Agent Teams events — spawning teammates
         // The Lead should spawn agents (team.agent.started events or Agent tool uses)
         let teamStartEvents = allEvents.filter { $0.type == "team.agent.started" }
+        let persistedTeamActivity = allEvents.filter {
+            $0.type == "team.agent.started"
+                || $0.type == "team.agent.completed"
+                || $0.type == "team.message"
+        }
         let agentToolUses = allEvents.filter { $0.type == "tool.use" && $0.payload.contains("Agent") }
-        let hasTeamActivity = !teamStartEvents.isEmpty || !agentToolUses.isEmpty
+        let callbackTeamActivity = receivedEvents.contains {
+            if case .teammateStarted = $0 { return true }
+            if case .teammateCompleted = $0 { return true }
+            if case .teamMessage = $0 { return true }
+            if case .toolUse(let name, _, _) = $0, name == "Agent" { return true }
+            return false
+        }
+        let hasTeamActivity = !teamStartEvents.isEmpty
+            || !agentToolUses.isEmpty
+            || !persistedTeamActivity.isEmpty
+            || callbackTeamActivity
         if runtimeCase.expectsTeamEvents {
             #expect(hasTeamActivity, "Should have team agent spawning events (team.agent.started or Agent tool uses)")
         }

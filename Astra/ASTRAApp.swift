@@ -412,6 +412,7 @@ public struct ASTRAApp: App {
         if !skipWorkspaceRecovery {
             WorkspaceRecoveryService.recoverMissingWorkspacesAfterLaunch(modelContext: modelContext)
         }
+        WorkspacePortablePackageBackfillService.schedule(modelContext: modelContext)
         // Approved-package disk sync is owned by PluginCatalog.loadApprovedCapabilities()
         // (runtime.loadPluginCatalog()), which runs synchronously in
         // ContentView.handleAppear BEFORE this deferred Task. By the time we get

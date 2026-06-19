@@ -148,6 +148,8 @@ public struct ArtifactConfig: Codable, Equatable, Sendable {
     public var id: String?
     public var type: String
     public var path: String
+    public var pathBase: String?
+    public var relativePath: String?
     public var content: String?
     public var version: Int
     public var createdAt: Date
@@ -156,6 +158,8 @@ public struct ArtifactConfig: Codable, Equatable, Sendable {
         id: String?,
         type: String,
         path: String,
+        pathBase: String? = nil,
+        relativePath: String? = nil,
         content: String?,
         version: Int,
         createdAt: Date
@@ -163,6 +167,8 @@ public struct ArtifactConfig: Codable, Equatable, Sendable {
         self.id = id
         self.type = type
         self.path = path
+        self.pathBase = pathBase
+        self.relativePath = relativePath
         self.content = content
         self.version = version
         self.createdAt = createdAt

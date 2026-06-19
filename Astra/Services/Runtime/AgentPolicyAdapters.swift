@@ -535,8 +535,8 @@ struct CursorPolicyAdapter: ProviderPolicyAdapter {
         ProviderPolicyFeatures(
             supportsAllowTools: false,
             supportsDenyTools: false,
-            // Cursor CLI only exposes sandbox/force flags; it cannot surface
-            // ask-first checkpoints back to ASTRA, so do not advertise them.
+            // Cursor CLI exposes a broad force flag for autonomous runs, but
+            // not provider-native allow, deny, sandbox, or ask checkpoints.
             supportsAskFirstMode: false,
             supportsPathScoping: false,
             supportsURLAllowlist: false,
@@ -568,10 +568,10 @@ struct CursorPolicyAdapter: ProviderPolicyAdapter {
             diagnostics.append(PolicyDiagnostic(
                 id: "cursor_cli.fine-grained-provider-native-gap",
                 severity: .warning,
-                title: "Fine-grained rules use Cursor sandbox mode",
-                message: "Cursor CLI exposes per-run sandbox, ask mode, and force flags, but this adapter cannot render ASTRA's individual allow, deny, and ask-first rules as provider-native flags.",
+                title: "Fine-grained rules are brokered by ASTRA",
+                message: "Cursor CLI exposes a broad force flag for autonomous runs, but this adapter cannot render ASTRA's individual allow, deny, sandbox, and ask-first rules as provider-native flags.",
                 affectedCapability: "permissions",
-                remediation: "Use Ask or Locked mode for sandboxed runs. Use Auto only for trusted or isolated work."
+                remediation: "Use Ask or Locked mode for ASTRA-brokered controls. Use Auto only for trusted or isolated work."
             ))
         }
 
@@ -591,9 +591,9 @@ struct CursorPolicyAdapter: ProviderPolicyAdapter {
             allowedURLPatterns: policy.allowedURLPatterns,
             deniedURLPatterns: policy.deniedURLPatterns,
             cliArgumentsSummary: args,
-            settingsSummary: "Generated per-run Cursor CLI sandbox and mode flags",
+            settingsSummary: "Generated per-run Cursor CLI flags",
             generatedConfigPreview: args.joined(separator: " "),
-            enforcementTiers: permissionPolicy == .autonomous ? [.providerNative] : [.providerNative, .astraBrokered],
+            enforcementTiers: permissionPolicy == .autonomous ? [.providerNative] : [.astraBrokered],
             diagnostics: diagnostics,
             usesBroadProviderPermissions: permissionPolicy == .autonomous
         )

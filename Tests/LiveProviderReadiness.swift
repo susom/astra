@@ -29,6 +29,17 @@ enum LiveProviderReadiness {
         runCommand: CommandRunner = run
     ) -> Failure? {
         switch runtimeID {
+        case .cursorCLI:
+            let result = runCommand(executablePath, ["status"])
+            guard result.exitCode == 0,
+                  RuntimeReadinessDiagnostics.showsAuthenticatedSession(result.output) else {
+                let evidence = LiveProviderDiagnostics.redacted(String(result.output.prefix(500)))
+                return Failure(
+                    runtimeID: runtimeID,
+                    message: "Cursor CLI is installed but not authenticated for live E2E. Run `cursor-agent login`, verify `cursor-agent status` reports an authenticated session, then rerun. Evidence: \(evidence)"
+                )
+            }
+            return nil
         case .openCodeCLI:
             let result = runCommand(executablePath, ["auth", "list"])
             guard result.exitCode == 0,
