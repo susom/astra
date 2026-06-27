@@ -798,9 +798,14 @@ nonisolated final class AgentProcessMonitor: @unchecked Sendable {
             return recordRuntimeStop(reason: stop.reason, message: stop.message, process: process)
         }
 
-        if case .result = parsed {
+        if case .result(_, _, _, _, _, _, let isError) = parsed {
             _turnCount += 1
             if maxTurns > 0 && _turnCount >= maxTurns {
+                if _sawAstraComplete && !isError {
+                    _terminatedAfterTerminalProgress = true
+                    process?.terminate()
+                    return true
+                }
                 AppLogger.audit(.workerBudgetExceeded, category: "Worker", taskID: taskID, fields: [
                     "reason": "max_turns_reached",
                     "turns": String(_turnCount),

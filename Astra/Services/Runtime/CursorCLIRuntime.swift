@@ -49,8 +49,6 @@ enum CursorCLIRuntime {
         var args = [
             "--print",
             "--output-format", "stream-json",
-            "--trust",
-            "--workspace", workspacePath,
             "--model", providerModel
         ]
         args += cursorPermissionArguments(policy: permissionPolicy)
@@ -84,11 +82,9 @@ enum CursorCLIRuntime {
     static func cursorPermissionArguments(policy: PermissionPolicy) -> [String] {
         switch policy {
         case .autonomous:
-            return ["--force", "--sandbox", "disabled"]
-        case .restricted:
-            return ["--sandbox", "enabled"]
-        case .interactive:
-            return ["--mode", "ask", "--sandbox", "enabled"]
+            return ["--force"]
+        case .restricted, .interactive:
+            return []
         }
     }
 
@@ -164,8 +160,11 @@ enum CursorCLIRuntime {
         if lower.contains("cursor-agent login") || lower.contains("not logged in") || lower.contains("authentication") {
             return "Cursor CLI needs an authenticated session before ASTRA can run it. Open a terminal and run `cursor-agent login`, then retry.\n"
         }
+        if lower.contains("unknown option") && (lower.contains("trust") || lower.contains("sandbox") || lower.contains("workspace")) {
+            return "Cursor CLI rejected an unsupported launch flag. Update ASTRA's Cursor adapter or use a Cursor CLI version whose help output matches the planned flags.\n"
+        }
         if lower.contains("trust") && lower.contains("workspace") {
-            return "Cursor CLI is waiting for workspace trust. ASTRA launches Cursor with `--trust`; retry after checking the workspace path.\n"
+            return "Cursor CLI is waiting for workspace trust. Retry after checking the workspace path.\n"
         }
         if lower.contains("approval") || lower.contains("permission") {
             return "Cursor CLI is waiting for an approval ASTRA cannot answer directly: \(line)\n"

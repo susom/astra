@@ -1245,6 +1245,33 @@ struct ProcessMonitorTests {
         #expect(monitor.maxTurnsExceeded == true)
     }
 
+    @Test("Max turns after ASTRA complete terminates as successful terminal progress")
+    func maxTurnsAfterAstraCompleteTerminatesAsSuccessfulTerminalProgress() {
+        let monitor = AgentRuntimeWorker.ProcessMonitor(tokenBudget: Int.max, maxTurns: 1)
+        let process = MonitorMockProcess()
+        let result = ParsedEvent.result(
+            text: "done",
+            costUSD: 0.001,
+            totalInputTokens: 50,
+            totalOutputTokens: 50,
+            durationMs: 100,
+            numTurns: 1,
+            isError: false
+        )
+
+        let completeStopped = monitor.processEvent(
+            .astraProtocol(.valid(.complete(summary: "Done", verifiedBy: "tests"))),
+            process: process
+        )
+        let resultStopped = monitor.processEvent(result, process: process)
+
+        #expect(completeStopped == false)
+        #expect(resultStopped == true)
+        #expect(process.didTerminate == true)
+        #expect(monitor.terminatedAfterTerminalProgress == true)
+        #expect(monitor.maxTurnsExceeded == false)
+    }
+
     @Test("Unlimited turns (0) never exceeds")
     func unlimitedTurns() {
         let monitor = AgentRuntimeWorker.ProcessMonitor(tokenBudget: Int.max, maxTurns: 0)

@@ -6,6 +6,7 @@ import ASTRACore
 /// to `session_history.md` in the task folder and saves full output to numbered files.
 /// This allows the agent to recover context even when the conversation window compresses older turns.
 enum SessionHistoryManager {
+    static let historyFileName = "session_history.md"
 
     /// Append a turn entry to the session history file after a run completes.
     static func recordTurn(
@@ -22,7 +23,7 @@ enum SessionHistoryManager {
         guard !taskFolder.isEmpty else { return }
         try? FileManager.default.createDirectory(atPath: taskFolder, withIntermediateDirectories: true)
 
-        let historyPath = (taskFolder as NSString).appendingPathComponent("session_history.md")
+        let historyPath = (taskFolder as NSString).appendingPathComponent(historyFileName)
         let turnNumber = nextTurnNumber(historyPath: historyPath, taskFolder: taskFolder)
         let timestamp = Self.formatTimestamp(Date())
         let redactedMessage = redactSensitiveContent(turnMessage, redactions: redactions)
@@ -84,7 +85,7 @@ enum SessionHistoryManager {
 
     /// Path to the session history file for a task folder.
     static func historyPath(taskFolder: String) -> String {
-        (taskFolder as NSString).appendingPathComponent("session_history.md")
+        (taskFolder as NSString).appendingPathComponent(historyFileName)
     }
 
     // MARK: - Private

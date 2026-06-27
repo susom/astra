@@ -124,11 +124,11 @@ private func makeRichWorkspace(in context: ModelContext, root: String) throws ->
     return workspace
 }
 
-@Suite("Workspace Persistence v10")
+@Suite("Workspace Persistence v11")
 struct WorkspacePersistenceTests {
-    @Test("v10 export and import preserve IDs, review state, history, artifacts, and redacted credentials")
+    @Test("v11 export and import preserve portable IDs, history, artifacts, and redacted credentials")
     @MainActor
-    func v10RoundTripPreservesDurableIDs() throws {
+    func v11RoundTripPreservesPortableDurableIDs() throws {
         let tempRoot = "/tmp/astra_persistence_\(UUID().uuidString)"
         let container = try makeWorkspacePersistenceContainer()
         let context = container.mainContext
@@ -136,6 +136,27 @@ struct WorkspacePersistenceTests {
         let sourceTask = try #require(workspace.tasks.first)
         sourceTask.isPinned = true
         sourceTask.isDone = true
+        sourceTask.sessionId = "provider-session-should-not-export"
+        sourceTask.draftMessages = #"{"role":"user","content":"draft should stay local"}"#
+        let sourceRun = try #require(sourceTask.runs.first)
+        sourceRun.providerSessionId = "run-session-should-not-export"
+        sourceRun.output = "Build complete with sk-test-secret"
+        sourceRun.fileChangesJSON = TaskEvent.payloadString([
+            StoredFileChange(
+                path: "\(tempRoot)/build.log",
+                changeType: "Write",
+                content: "api_key=secret-value",
+                oldString: nil,
+                newString: "token=secret-value"
+            ),
+            StoredFileChange(
+                path: "/Users/example/private/outside.log",
+                changeType: "Write",
+                content: "outside",
+                oldString: nil,
+                newString: nil
+            )
+        ])
         try context.save()
 
         let config = try #require(WorkspaceConfigManager.export(workspace: workspace, modelContext: context))
@@ -158,20 +179,36 @@ struct WorkspacePersistenceTests {
         #expect(config.tasks?.first?.skillSnapshots?.first?.id == workspace.skills.first?.id.uuidString)
         #expect(config.tasks?.first?.isPinned == true)
         #expect(config.tasks?.first?.isDone == true)
-        #expect(config.tasks?.first?.unreadAt == sourceTask.unreadAt)
+        #expect(config.tasks?.first?.sessionId == nil)
+        #expect(config.tasks?.first?.runs.first?.providerSessionId == nil)
+        #expect(config.tasks?.first?.unreadAt == nil)
+        #expect(config.tasks?.first?.draftMessages == nil)
+        #expect(config.tasks?.first?.runs.first?.output.contains("sk-test-secret") == false)
+        #expect(config.tasks?.first?.runs.first?.fileChangesJSON.contains("secret-value") == false)
+        #expect(config.tasks?.first?.runs.first?.fileChangesJSON.contains("build.log") == true)
+        #expect(config.tasks?.first?.runs.first?.fileChangesJSON.contains("/Users/example") == false)
+        #expect(config.tasks?.first?.artifacts?.first?.path == "build.log")
+        #expect(config.tasks?.first?.artifacts?.first?.pathBase == "workspace")
+        #expect(config.tasks?.first?.artifacts?.first?.relativePath == "build.log")
         #expect(config.enabledCapabilityIDs == ["stanford.builder"])
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let json = String(data: try encoder.encode(config), encoding: .utf8) ?? ""
         #expect(!json.contains("plaintext-secret-should-not-export"))
+        #expect(!json.contains("provider-session-should-not-export"))
+        #expect(!json.contains("run-session-should-not-export"))
+        #expect(!json.contains("draft should stay local"))
         #expect(json.contains("API_TOKEN"))
         #expect(config.skills.first?.environmentValues == ["test"])
         #expect(config.tasks?.first?.skillSnapshots?.first?.environmentValues == [""])
 
+        let relocatedRoot = "/tmp/astra_relocated_\(UUID().uuidString)"
+        var relocatedConfig = config
+        relocatedConfig.primaryPath = relocatedRoot
         let importedContainer = try makeWorkspacePersistenceContainer()
         let importedContext = importedContainer.mainContext
-        let imported = WorkspaceConfigManager.importWorkspace(from: config, modelContext: importedContext)
+        let imported = WorkspaceConfigManager.importWorkspace(from: relocatedConfig, modelContext: importedContext)
         try importedContext.save()
 
         #expect(imported.id == workspace.id)
@@ -189,11 +226,14 @@ struct WorkspacePersistenceTests {
         #expect(imported.tasks.first?.id == workspace.tasks.first?.id)
         #expect(imported.tasks.first?.isPinned == true)
         #expect(imported.tasks.first?.isDone == true)
-        #expect(imported.tasks.first?.unreadAt == sourceTask.unreadAt)
+        #expect(imported.tasks.first?.sessionId == nil)
+        #expect(imported.tasks.first?.unreadAt == nil)
         #expect(imported.tasks.first?.skills.first?.id == workspace.skills.first?.id)
         #expect(imported.tasks.first?.runs.first?.id == workspace.tasks.first?.runs.first?.id)
+        #expect(imported.tasks.first?.runs.first?.providerSessionId == nil)
         #expect(imported.tasks.first?.events.first?.id == workspace.tasks.first?.events.first?.id)
         #expect(imported.tasks.first?.artifacts.first?.id == workspace.tasks.first?.artifacts.first?.id)
+        #expect(imported.tasks.first?.artifacts.first?.path == "\(relocatedRoot)/build.log")
     }
 
     @Test("legacy task configs without done state import as not done")
@@ -555,6 +595,239 @@ struct WorkspacePersistenceTests {
         #expect(workspaces.first?.tasks.first?.isDone == true)
     }
 
+    @Test("canonical workspace export writes portable package manifests")
+    @MainActor
+    func canonicalWorkspaceExportWritesPortablePackageManifests() throws {
+        let root = URL(fileURLWithPath: "/tmp/astra_manifest_\(UUID().uuidString)")
+        let workspaceFolder = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: workspaceFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try makeWorkspacePersistenceContainer()
+        let context = container.mainContext
+        let workspace = try makeRichWorkspace(in: context, root: workspaceFolder.path)
+        let task = try #require(workspace.tasks.first)
+        task.sessionId = "session-not-portable"
+        try context.save()
+
+        let configURL = workspaceFolder.appendingPathComponent(WorkspaceFileLayout.workspaceConfigFileName)
+        try WorkspaceConfigManager.exportToFile(workspace: workspace, modelContext: context, url: configURL)
+
+        let workspaceManifestURL = WorkspacePortablePackageManifestService.workspaceManifestURL(workspaceURL: workspaceFolder)
+        let taskManifestURL = try #require(
+            WorkspacePortablePackageManifestService.taskManifestURL(
+                workspaceURL: workspaceFolder,
+                taskID: task.id.uuidString
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let workspaceManifest = try decoder.decode(
+            WorkspacePortablePackageManifestService.WorkspaceManifest.self,
+            from: Data(contentsOf: workspaceManifestURL)
+        )
+        let taskManifest = try decoder.decode(
+            WorkspacePortablePackageManifestService.TaskManifest.self,
+            from: Data(contentsOf: taskManifestURL)
+        )
+
+        #expect(workspaceManifest.workspaceID == workspace.id.uuidString)
+        #expect(workspaceManifest.workspaceConfigFile == WorkspaceFileLayout.workspaceConfigFileName)
+        #expect(workspaceManifest.supportDirectory == WorkspaceFileLayout.supportDirectoryName)
+        #expect(workspaceManifest.taskCount == 1)
+        #expect(workspaceManifest.tasks.first?.manifestFile.hasSuffix("/task_manifest.json") == true)
+        #expect(workspaceManifest.localOnlyExcludes.contains("provider session identifiers"))
+        #expect(taskManifest.taskID == task.id.uuidString)
+        #expect(taskManifest.task.sessionId == nil)
+        #expect(taskManifest.localOnlyExcludes.contains("provider session identifiers"))
+        #expect(taskManifest.stateFiles.contains { $0.hasSuffix("/current_state.json") })
+        #expect(taskManifest.outputDirectory.hasSuffix("/outputs"))
+    }
+
+    @Test("auto-export writes portable package manifests")
+    @MainActor
+    func autoExportWritesPortablePackageManifests() async throws {
+        let root = URL(fileURLWithPath: "/tmp/astra_auto_manifest_\(UUID().uuidString)")
+        let workspaceFolder = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: workspaceFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let container = try makeWorkspacePersistenceContainer()
+        let context = container.mainContext
+        let workspace = try makeRichWorkspace(in: context, root: workspaceFolder.path)
+        let task = try #require(workspace.tasks.first)
+
+        WorkspaceConfigManager.autoExport(workspace: workspace, modelContext: context)
+
+        let configURL = workspaceFolder.appendingPathComponent(WorkspaceFileLayout.workspaceConfigFileName)
+        let workspaceManifestURL = WorkspacePortablePackageManifestService.workspaceManifestURL(workspaceURL: workspaceFolder)
+        let taskManifestURL = try #require(
+            WorkspacePortablePackageManifestService.taskManifestURL(
+                workspaceURL: workspaceFolder,
+                taskID: task.id.uuidString
+            )
+        )
+        try await waitForFiles([configURL, workspaceManifestURL, taskManifestURL])
+
+        #expect(FileManager.default.fileExists(atPath: configURL.path))
+        #expect(FileManager.default.fileExists(atPath: workspaceManifestURL.path))
+        #expect(FileManager.default.fileExists(atPath: taskManifestURL.path))
+    }
+
+    @Test("portable package backfill writes manifests once")
+    @MainActor
+    func portablePackageBackfillWritesManifestsOnce() throws {
+        let root = URL(fileURLWithPath: "/tmp/astra_backfill_manifest_\(UUID().uuidString)")
+        let workspaceFolder = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: workspaceFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (defaults, suiteName) = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let container = try makeWorkspacePersistenceContainer()
+        let context = container.mainContext
+        let workspace = try makeRichWorkspace(in: context, root: workspaceFolder.path)
+        let task = try #require(workspace.tasks.first)
+        task.sessionId = "session-not-portable"
+        try context.save()
+
+        let result = WorkspacePortablePackageBackfillService.backfillIfNeeded(
+            modelContext: context,
+            defaults: defaults,
+            skipAutoExport: false
+        )
+
+        let configURL = workspaceFolder.appendingPathComponent(WorkspaceFileLayout.workspaceConfigFileName)
+        let workspaceManifestURL = WorkspacePortablePackageManifestService.workspaceManifestURL(workspaceURL: workspaceFolder)
+        let taskManifestURL = try #require(
+            WorkspacePortablePackageManifestService.taskManifestURL(
+                workspaceURL: workspaceFolder,
+                taskID: task.id.uuidString
+            )
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let taskManifest = try decoder.decode(
+            WorkspacePortablePackageManifestService.TaskManifest.self,
+            from: Data(contentsOf: taskManifestURL)
+        )
+
+        #expect(result.status == .backfilled)
+        #expect(result.workspaceCount == 1)
+        #expect(result.exportedCount == 1)
+        #expect(result.skippedUnavailableCount == 0)
+        #expect(result.failedCount == 0)
+        #expect(defaults.string(forKey: AppStorageKeys.completedWorkspacePortablePackageBackfillVersion) ==
+            WorkspacePortablePackageBackfillService.completedBackfillVersion)
+        #expect(FileManager.default.fileExists(atPath: configURL.path))
+        #expect(FileManager.default.fileExists(atPath: workspaceManifestURL.path))
+        #expect(FileManager.default.fileExists(atPath: taskManifestURL.path))
+        #expect(taskManifest.task.sessionId == nil)
+
+        let secondResult = WorkspacePortablePackageBackfillService.backfillIfNeeded(
+            modelContext: context,
+            defaults: defaults,
+            skipAutoExport: false
+        )
+        #expect(secondResult.status == .skippedAlreadyCompleted)
+        #expect(secondResult.exportedCount == 0)
+    }
+
+    @Test("portable package backfill skips unavailable workspace paths")
+    @MainActor
+    func portablePackageBackfillSkipsUnavailableWorkspacePaths() throws {
+        let missingRoot = "/tmp/astra_backfill_missing_\(UUID().uuidString)"
+        let (defaults, suiteName) = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let container = try makeWorkspacePersistenceContainer()
+        let context = container.mainContext
+        let workspace = Workspace(name: "Missing", primaryPath: missingRoot)
+        context.insert(workspace)
+        try context.save()
+
+        let result = WorkspacePortablePackageBackfillService.backfillIfNeeded(
+            modelContext: context,
+            defaults: defaults,
+            skipAutoExport: false
+        )
+
+        #expect(result.status == .backfilled)
+        #expect(result.workspaceCount == 1)
+        #expect(result.exportedCount == 0)
+        #expect(result.skippedUnavailableCount == 1)
+        #expect(result.failedCount == 0)
+        #expect(defaults.string(forKey: AppStorageKeys.completedWorkspacePortablePackageBackfillVersion) ==
+            WorkspacePortablePackageBackfillService.completedBackfillVersion)
+        #expect(!FileManager.default.fileExists(atPath: missingRoot))
+    }
+
+    @Test("portable package backfill respects auto-export skip flags")
+    @MainActor
+    func portablePackageBackfillRespectsAutoExportSkipFlags() throws {
+        let root = URL(fileURLWithPath: "/tmp/astra_backfill_skip_\(UUID().uuidString)")
+        let workspaceFolder = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: workspaceFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (defaults, suiteName) = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let container = try makeWorkspacePersistenceContainer()
+        let context = container.mainContext
+        _ = try makeRichWorkspace(in: context, root: workspaceFolder.path)
+
+        let result = WorkspacePortablePackageBackfillService.backfillIfNeeded(
+            modelContext: context,
+            defaults: defaults,
+            skipAutoExport: true
+        )
+
+        let configURL = workspaceFolder.appendingPathComponent(WorkspaceFileLayout.workspaceConfigFileName)
+        #expect(result.status == .skippedAutoExportDisabled)
+        #expect(result.exportedCount == 0)
+        #expect(defaults.string(forKey: AppStorageKeys.completedWorkspacePortablePackageBackfillVersion) == nil)
+        #expect(!FileManager.default.fileExists(atPath: configURL.path))
+    }
+
+    @Test("portable package backfill retries after write failures")
+    @MainActor
+    func portablePackageBackfillRetriesAfterWriteFailures() throws {
+        let root = URL(fileURLWithPath: "/tmp/astra_backfill_retry_\(UUID().uuidString)")
+        let workspaceFolder = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: workspaceFolder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let supportFile = workspaceFolder.appendingPathComponent(WorkspaceFileLayout.supportDirectoryName)
+        try Data("not a directory".utf8).write(to: supportFile)
+        let (defaults, suiteName) = try makeIsolatedDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let container = try makeWorkspacePersistenceContainer()
+        let context = container.mainContext
+        _ = try makeRichWorkspace(in: context, root: workspaceFolder.path)
+
+        let failedResult = WorkspacePortablePackageBackfillService.backfillIfNeeded(
+            modelContext: context,
+            defaults: defaults,
+            skipAutoExport: false
+        )
+        #expect(failedResult.status == .backfilled)
+        #expect(failedResult.exportedCount == 0)
+        #expect(failedResult.failedCount == 1)
+        #expect(defaults.string(forKey: AppStorageKeys.completedWorkspacePortablePackageBackfillVersion) == nil)
+
+        try FileManager.default.removeItem(at: supportFile)
+        let retriedResult = WorkspacePortablePackageBackfillService.backfillIfNeeded(
+            modelContext: context,
+            defaults: defaults,
+            skipAutoExport: false
+        )
+        #expect(retriedResult.status == .backfilled)
+        #expect(retriedResult.exportedCount == 1)
+        #expect(retriedResult.failedCount == 0)
+        #expect(defaults.string(forKey: AppStorageKeys.completedWorkspacePortablePackageBackfillVersion) ==
+            WorkspacePortablePackageBackfillService.completedBackfillVersion)
+    }
+
     @Test("automatic recovery skips privacy-sensitive user media folders")
     func recoverySkipsPrivacySensitiveUserMediaFolders() throws {
         let root = URL(fileURLWithPath: "/tmp/astra_recovery_privacy_\(UUID().uuidString)")
@@ -771,6 +1044,22 @@ struct WorkspacePersistenceTests {
             sshConnections: [],
             exportedAt: Date()
         )
+    }
+
+    private func waitForFiles(_ urls: [URL]) async throws {
+        for _ in 0..<40 {
+            if urls.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    private func makeIsolatedDefaults() throws -> (UserDefaults, String) {
+        let suiteName = "WorkspacePersistenceTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        return (defaults, suiteName)
     }
 
     @Test("workspace support files migrate under hidden astra folder")

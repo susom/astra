@@ -88,6 +88,39 @@ struct LiveProviderDiagnosticsTests {
 
 @Suite("Live provider readiness")
 struct LiveProviderReadinessTests {
+    @Test("Cursor readiness blocks logged out status")
+    func cursorReadinessBlocksLoggedOutStatus() {
+        let result = LiveProviderReadiness.check(
+            runtimeID: .cursorCLI,
+            executablePath: "/usr/bin/cursor-agent",
+            runCommand: { _, _ in
+                LiveProviderReadiness.CommandResult(
+                    exitCode: 0,
+                    output: "Starting login process...\nChecking authentication status...\nNot logged in\n"
+                )
+            }
+        )
+
+        #expect(result?.message.contains("cursor-agent login") == true)
+        #expect(result?.message.contains("Not logged in") == true)
+    }
+
+    @Test("Cursor readiness accepts authenticated status")
+    func cursorReadinessAcceptsAuthenticatedStatus() {
+        let result = LiveProviderReadiness.check(
+            runtimeID: .cursorCLI,
+            executablePath: "/usr/bin/cursor-agent",
+            runCommand: { _, _ in
+                LiveProviderReadiness.CommandResult(
+                    exitCode: 0,
+                    output: "Logged in as user@example.com\n"
+                )
+            }
+        )
+
+        #expect(result == nil)
+    }
+
     @Test("OpenCode readiness blocks zero credentials")
     func openCodeReadinessBlocksZeroCredentials() {
         let result = LiveProviderReadiness.check(

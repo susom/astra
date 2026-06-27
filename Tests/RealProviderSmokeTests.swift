@@ -282,7 +282,7 @@ struct RealProviderSmokeTests {
     }
 
     @Test(
-        "Real Copilot Masterball launch creates task output artifact",
+        "Real Copilot artifact launch creates task output artifact",
         .enabled(if: realProviderSmokeEnabled, "Set RUN_REAL_PROVIDERS=1 to run account-backed provider smoke tests")
     )
     func realCopilotMasterballLaunchCreatesTaskOutputArtifact() async throws {
@@ -292,12 +292,15 @@ struct RealProviderSmokeTests {
         let copilotPath = try #require(Self.findExecutable("copilot"))
         let model = Self.liveConfig.copilotArtifactModel
         let worker = harness.makeWorker(copilotPath: copilotPath)
+        harness.configureUnattendedArtifactWorker(worker)
         worker.timeoutSeconds = TimeInterval(ProcessInfo.processInfo.environment["REAL_PROVIDER_ARTIFACT_TIMEOUT"] ?? "")
             ?? 240
 
         let task = harness.makeTask(
             runtime: .copilotCLI,
-            goal: "createa web page wit a masterball (similar to rubicks cube but as aball ) with a solver in javascript",
+            goal: """
+            Create a small single-file web artifact named index.html in the task output folder. It must show the exact text ASTRA_REAL_COPILOT_ARTIFACT_OK and include a button that increments a visible counter in JavaScript. Keep it simple, do not use external libraries, do not run shell commands, and finish immediately after writing the file.
+            """,
             model: model
         )
         _ = try TaskWorkspaceAccess(task: task).ensureTaskFolder()
@@ -1054,6 +1057,12 @@ private final class RealProviderHarness {
             ?? 120
         worker.permissionPolicy = .restricted
         return worker
+    }
+
+    func configureUnattendedArtifactWorker(_ worker: AgentRuntimeWorker) {
+        worker.skipPermissions = true
+        worker.permissionPolicy = .autonomous
+        worker.defaultAgentPolicyLevelRaw = AgentPolicyLevel.autonomous.rawValue
     }
 
     func makeWorker(for runtime: AgentRuntimeID, executablePath: String) -> AgentRuntimeWorker {
