@@ -785,7 +785,7 @@ enum TaskStateMachine {
 /// across the seam boundary - acceptable because it has exactly one call
 /// site in the whole app (`AgentTaskForkService.fork()`) and its contract
 /// (draft/completed -> completed) is fixed.
-extension TaskStateMachine: TaskForkStateInitializing {
+extension TaskStateMachine: @preconcurrency TaskForkStateInitializing {
     static func initializeForkAsCompleted(
         taskID: UUID,
         statusRawValue: String,
@@ -814,7 +814,7 @@ extension TaskStateMachine: TaskForkStateInitializing {
     }
 }
 
-extension TaskStateMachine: TaskSessionStateApplying {
+extension TaskStateMachine: @preconcurrency TaskSessionStateApplying {
     static func completeFromSessionRecovery(
         taskID: UUID,
         currentStatusRawValue: String,

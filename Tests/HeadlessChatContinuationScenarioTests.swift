@@ -7,6 +7,18 @@ import ASTRAPersistence
 import ASTRACore
 
 extension HeadlessChatScenarioTests {
+    private func installGitHubHostControlTool(for task: AgentTask, in context: ModelContext) {
+        let tool = LocalTool(
+            name: "gh - GitHub CLI",
+            toolDescription: "Read GitHub repository metadata through ASTRA host-control",
+            toolType: "cli",
+            command: "gh"
+        )
+        tool.originPackageID = HostControlPlaneMCPProjection.githubPackageID
+        tool.workspace = task.workspace
+        context.insert(tool)
+    }
+
     @Test("Changing runtime from Claude to Copilot starts a clean provider run")
     func changingRuntimeFromClaudeToCopilotStartsCleanProviderRun() async throws {
         let harness = try HeadlessChatHarness()
@@ -937,6 +949,7 @@ extension HeadlessChatScenarioTests {
         skill.workspace = task.workspace
         task.skills = [skill]
         harness.context.insert(skill)
+        installGitHubHostControlTool(for: task, in: harness.context)
 
         let worker = harness.makeWorker(runtime: .cursorCLI, executablePath: cursorPath, permissionPolicy: .autonomous)
         worker.defaultRuntimeID = .copilotCLI
@@ -995,6 +1008,7 @@ extension HeadlessChatScenarioTests {
         skill.workspace = task.workspace
         task.skills = [skill]
         harness.context.insert(skill)
+        installGitHubHostControlTool(for: task, in: harness.context)
 
         let worker = harness.makeWorker(runtime: .cursorCLI, executablePath: cursorPath, permissionPolicy: .autonomous)
         worker.defaultRuntimeID = .copilotCLI
@@ -1047,6 +1061,7 @@ extension HeadlessChatScenarioTests {
         githubSkill.workspace = task.workspace
         task.skills = [githubSkill]
         harness.context.insert(githubSkill)
+        installGitHubHostControlTool(for: task, in: harness.context)
 
         let worker = harness.makeWorker(
             runtime: .cursorCLI,

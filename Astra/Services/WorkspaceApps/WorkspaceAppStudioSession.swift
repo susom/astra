@@ -131,9 +131,17 @@ final class WorkspaceAppStudioSession: ObservableObject {
     /// ceiling keeps the post-turn verdict snappy and bails fast if the provider stalls.
     private static let verificationTimeoutSeconds: TimeInterval = 90
 
+    convenience init(journalStore: WorkspaceAppStudioJournalStoring = WorkspaceAppStudioJournalService()) {
+        self.init(
+            generate: WorkspaceAppStudioSession.defaultGenerate,
+            verify: WorkspaceAppStudioSession.defaultVerify,
+            journalStore: journalStore
+        )
+    }
+
     init(
-        generate: @escaping WorkspaceAppStudioGenerate = WorkspaceAppStudioSession.defaultGenerate,
-        verify: @escaping WorkspaceAppStudioVerify = WorkspaceAppStudioSession.defaultVerify,
+        generate: @escaping WorkspaceAppStudioGenerate,
+        verify: @escaping WorkspaceAppStudioVerify,
         journalStore: WorkspaceAppStudioJournalStoring = WorkspaceAppStudioJournalService()
     ) {
         self.generate = generate
