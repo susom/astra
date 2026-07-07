@@ -277,7 +277,7 @@ enum BrowserAutomationEngineRequirementBridgePolicy {
 /// know about the engine protocol and `ShelfBrowserSession` can hold a single
 /// `any BrowserAutomationEngineOperating` regardless of which backend is active.
 @MainActor
-struct ControlledBrowserEngineAdapter: BrowserAutomationEngineOperating {
+struct ControlledBrowserEngineAdapter: @preconcurrency BrowserAutomationEngineOperating {
     let controller: ControlledBrowserController
 
     var automationDescriptor: BrowserAutomationEngineDescriptor {
@@ -414,7 +414,7 @@ struct ControlledBrowserEngineAdapter: BrowserAutomationEngineOperating {
 /// operation's script via the existing `BrowserAutomationScripts` builders,
 /// exactly as the former `isUsingControlledBrowser`-branch `else` clauses did.
 @MainActor
-struct EmbeddedWebKitEngine: BrowserAutomationEngineOperating {
+struct EmbeddedWebKitEngine: @preconcurrency BrowserAutomationEngineOperating {
     let evaluateJavaScript: (String) async throws -> String
 
     var automationDescriptor: BrowserAutomationEngineDescriptor {
